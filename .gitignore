@@ -23,5 +23,8 @@ Thumbs.db
 # Test artifacts
 *.mp4
 
+# OpenSpec
+openspec/
+
 # Claude Code
 .claude/

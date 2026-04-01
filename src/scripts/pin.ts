@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 const canvas = document.getElementById("pin-image") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -14,23 +14,25 @@ let baseHeight = 300;
 let scale = 1;
 const MIN_SIZE = 50;
 
-// Load image data
-listen<{ data: number[]; width: number; height: number }>("load-pin-image", async (event) => {
-  const { data, width, height } = event.payload;
-  baseWidth = width;
-  baseHeight = height;
-  canvas.width = width;
-  canvas.height = height;
+// Load image from URL param
+function loadPinImage() {
+  const params = new URLSearchParams(window.location.search);
+  const filePath = params.get("path");
+  if (!filePath) return;
 
-  // data is PNG encoded, decode it
-  const blob = new Blob([new Uint8Array(data)], { type: "image/png" });
+  const assetUrl = convertFileSrc(filePath);
   const img = new Image();
   img.onload = () => {
+    baseWidth = img.naturalWidth;
+    baseHeight = img.naturalHeight;
+    canvas.width = baseWidth;
+    canvas.height = baseHeight;
     ctx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(img.src);
   };
-  img.src = URL.createObjectURL(blob);
-});
+  img.src = assetUrl;
+}
+
+loadPinImage();
 
 // Drag to move
 document.addEventListener("mousedown", (e) => {

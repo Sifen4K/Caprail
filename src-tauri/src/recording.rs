@@ -2,14 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-static RECORDING: AtomicBool = AtomicBool::new(false);
-static PAUSED: AtomicBool = AtomicBool::new(false);
-
-static RECORDING_STATE: once_cell::sync::Lazy<Mutex<RecordingContext>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(RecordingContext::default()));
+static SESSION: once_cell::sync::Lazy<Mutex<Option<RecordingSession>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,20 +28,22 @@ pub struct RecordingStatus {
     pub fps: f64,
 }
 
-#[derive(Default)]
-struct RecordingContext {
+struct RecordingSession {
     ffmpeg_process: Option<Child>,
-    start_time: Option<Instant>,
+    start_time: Instant,
     pause_duration: f64,
     last_pause_time: Option<Instant>,
     frame_count: u64,
-    config: Option<RecordingConfig>,
+    config: RecordingConfig,
     capture_thread: Option<std::thread::JoinHandle<()>>,
+    paused: bool,
+    stop_signal: Arc<AtomicBool>,
 }
 
 #[tauri::command]
 pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
-    if RECORDING.load(Ordering::SeqCst) {
+    let mut session_guard = SESSION.lock().unwrap();
+    if session_guard.is_some() {
         return Err("Already recording".to_string());
     }
 
@@ -94,38 +93,37 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
     let ffmpeg = cmd.spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {}. Make sure ffmpeg is in PATH.", e))?;
 
-    {
-        let mut state = RECORDING_STATE.lock().unwrap();
-        state.ffmpeg_process = Some(ffmpeg);
-        state.start_time = Some(Instant::now());
-        state.pause_duration = 0.0;
-        state.last_pause_time = None;
-        state.frame_count = 0;
-        state.config = Some(config.clone());
-    }
-
-    RECORDING.store(true, Ordering::SeqCst);
-    PAUSED.store(false, Ordering::SeqCst);
+    let stop_signal = Arc::new(AtomicBool::new(false));
 
     // Spawn capture thread with rounded dimensions
-    let mut capture_config = config;
+    let mut capture_config = config.clone();
     capture_config.width = width;
     capture_config.height = height;
+    let thread_stop = stop_signal.clone();
     let handle = std::thread::spawn(move || {
-        capture_loop(capture_config);
+        capture_loop(capture_config, thread_stop);
     });
 
-    {
-        let mut state = RECORDING_STATE.lock().unwrap();
-        state.capture_thread = Some(handle);
-    }
+    let session = RecordingSession {
+        ffmpeg_process: Some(ffmpeg),
+        start_time: Instant::now(),
+        pause_duration: 0.0,
+        last_pause_time: None,
+        frame_count: 0,
+        config,
+        capture_thread: Some(handle),
+        paused: false,
+        stop_signal,
+    };
+
+    *session_guard = Some(session);
 
     tracing::info!("Recording started: {}x{} @ {}fps", width, height, fps);
     Ok(())
 }
 
 #[cfg(windows)]
-fn capture_loop(config: RecordingConfig) {
+fn capture_loop(config: RecordingConfig, stop_signal: Arc<AtomicBool>) {
     use windows::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
         GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
@@ -156,12 +154,19 @@ fn capture_loop(config: RecordingConfig) {
 
         let mut frame_data = vec![0u8; frame_size];
 
-        while RECORDING.load(Ordering::SeqCst) {
+        while !stop_signal.load(Ordering::SeqCst) {
             let frame_start = Instant::now();
 
-            if PAUSED.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
+            // Check if paused
+            {
+                let session_guard = SESSION.lock().unwrap();
+                if let Some(ref session) = *session_guard {
+                    if session.paused {
+                        drop(session_guard);
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        continue;
+                    }
+                }
             }
 
             // Capture frame
@@ -181,18 +186,20 @@ fn capture_loop(config: RecordingConfig) {
             );
 
             // Write to ffmpeg stdin
-            let mut state = RECORDING_STATE.lock().unwrap();
-            if let Some(ref mut process) = state.ffmpeg_process {
-                if let Some(ref mut stdin) = process.stdin {
-                    if let Err(e) = stdin.write_all(&frame_data) {
-                        tracing::error!("FFmpeg stdin write error: {}", e);
-                        drop(state);
-                        break;
+            let mut session_guard = SESSION.lock().unwrap();
+            if let Some(ref mut session) = *session_guard {
+                if let Some(ref mut process) = session.ffmpeg_process {
+                    if let Some(ref mut stdin) = process.stdin {
+                        if let Err(e) = stdin.write_all(&frame_data) {
+                            tracing::error!("FFmpeg stdin write error: {}", e);
+                            drop(session_guard);
+                            break;
+                        }
                     }
                 }
+                session.frame_count += 1;
             }
-            state.frame_count += 1;
-            drop(state);
+            drop(session_guard);
 
             // Frame rate limiting
             let elapsed = frame_start.elapsed();
@@ -209,60 +216,48 @@ fn capture_loop(config: RecordingConfig) {
 }
 
 #[cfg(not(windows))]
-fn capture_loop(_config: RecordingConfig) {
-    while RECORDING.load(Ordering::SeqCst) {
+fn capture_loop(_config: RecordingConfig, stop_signal: Arc<AtomicBool>) {
+    while !stop_signal.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
 #[tauri::command]
 pub fn stop_recording() -> Result<String, String> {
-    if !RECORDING.load(Ordering::SeqCst) {
-        return Err("Not recording".to_string());
-    }
+    let mut session_guard = SESSION.lock().unwrap();
+    let mut session = session_guard.take().ok_or("Not recording".to_string())?;
 
-    RECORDING.store(false, Ordering::SeqCst);
-    PAUSED.store(false, Ordering::SeqCst);
+    // Signal the capture thread to stop
+    session.stop_signal.store(true, Ordering::SeqCst);
 
-    let output_path;
-    let capture_handle;
-    {
-        let mut state = RECORDING_STATE.lock().unwrap();
+    // Take capture thread handle out before closing ffmpeg
+    let capture_handle = session.capture_thread.take();
 
-        // Close ffmpeg stdin to signal end of input
-        if let Some(ref mut process) = state.ffmpeg_process {
-            if let Some(stdin) = process.stdin.take() {
-                drop(stdin);
-            }
-            // Wait for ffmpeg to finish
-            match process.wait() {
-                Ok(status) => {
-                    if !status.success() {
-                        tracing::error!("FFmpeg exited with status: {}", status);
-                    }
-                }
-                Err(e) => tracing::error!("FFmpeg wait failed: {}", e),
-            }
+    // Close ffmpeg stdin to signal end of input
+    if let Some(ref mut process) = session.ffmpeg_process {
+        if let Some(stdin) = process.stdin.take() {
+            drop(stdin);
         }
-        state.ffmpeg_process = None;
-
-        // Take capture thread handle out of the lock — join it outside to avoid deadlock
-        capture_handle = state.capture_thread.take();
-
-        output_path = state
-            .config
-            .as_ref()
-            .map(|c| c.output_path.clone())
-            .unwrap_or_default();
-
-        // Log frame count for diagnostics
-        tracing::info!("Recording frames captured: {}", state.frame_count);
-
-        state.config = None;
-        state.start_time = None;
+        // Wait for ffmpeg to finish
+        match process.wait() {
+            Ok(status) => {
+                if !status.success() {
+                    tracing::error!("FFmpeg exited with status: {}", status);
+                }
+            }
+            Err(e) => tracing::error!("FFmpeg wait failed: {}", e),
+        }
     }
 
-    // Wait for capture thread outside the lock to avoid deadlock
+    let output_path = session.config.output_path.clone();
+
+    // Log frame count for diagnostics
+    tracing::info!("Recording frames captured: {}", session.frame_count);
+
+    // Drop session_guard before joining thread to avoid deadlock
+    drop(session_guard);
+
+    // Wait for capture thread
     if let Some(handle) = capture_handle {
         let _ = handle.join();
     }
@@ -273,17 +268,15 @@ pub fn stop_recording() -> Result<String, String> {
 
 #[tauri::command]
 pub fn pause_recording() -> Result<(), String> {
-    if !RECORDING.load(Ordering::SeqCst) {
-        return Err("Not recording".to_string());
-    }
-    if PAUSED.load(Ordering::SeqCst) {
+    let mut session_guard = SESSION.lock().unwrap();
+    let session = session_guard.as_mut().ok_or("Not recording".to_string())?;
+
+    if session.paused {
         return Ok(());
     }
 
-    PAUSED.store(true, Ordering::SeqCst);
-
-    let mut state = RECORDING_STATE.lock().unwrap();
-    state.last_pause_time = Some(Instant::now());
+    session.paused = true;
+    session.last_pause_time = Some(Instant::now());
 
     tracing::info!("Recording paused");
     Ok(())
@@ -291,18 +284,16 @@ pub fn pause_recording() -> Result<(), String> {
 
 #[tauri::command]
 pub fn resume_recording() -> Result<(), String> {
-    if !RECORDING.load(Ordering::SeqCst) {
-        return Err("Not recording".to_string());
-    }
-    if !PAUSED.load(Ordering::SeqCst) {
+    let mut session_guard = SESSION.lock().unwrap();
+    let session = session_guard.as_mut().ok_or("Not recording".to_string())?;
+
+    if !session.paused {
         return Ok(());
     }
 
-    PAUSED.store(false, Ordering::SeqCst);
-
-    let mut state = RECORDING_STATE.lock().unwrap();
-    if let Some(pause_start) = state.last_pause_time.take() {
-        state.pause_duration += pause_start.elapsed().as_secs_f64();
+    session.paused = false;
+    if let Some(pause_start) = session.last_pause_time.take() {
+        session.pause_duration += pause_start.elapsed().as_secs_f64();
     }
 
     tracing::info!("Recording resumed");
@@ -311,36 +302,41 @@ pub fn resume_recording() -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_recording_status() -> RecordingStatus {
-    let state = RECORDING_STATE.lock().unwrap();
-    let is_recording = RECORDING.load(Ordering::SeqCst);
-    let is_paused = PAUSED.load(Ordering::SeqCst);
+    let session_guard = SESSION.lock().unwrap();
 
-    let duration = if let Some(start) = state.start_time {
-        let elapsed = start.elapsed().as_secs_f64() - state.pause_duration;
-        if is_paused {
-            if let Some(pause_start) = state.last_pause_time {
-                elapsed - pause_start.elapsed().as_secs_f64()
+    match session_guard.as_ref() {
+        None => RecordingStatus {
+            is_recording: false,
+            is_paused: false,
+            duration_secs: 0.0,
+            frame_count: 0,
+            fps: 0.0,
+        },
+        Some(session) => {
+            let elapsed = session.start_time.elapsed().as_secs_f64() - session.pause_duration;
+            let duration = if session.paused {
+                if let Some(pause_start) = session.last_pause_time {
+                    elapsed - pause_start.elapsed().as_secs_f64()
+                } else {
+                    elapsed
+                }
             } else {
                 elapsed
+            };
+
+            let fps = if duration > 0.0 {
+                session.frame_count as f64 / duration
+            } else {
+                0.0
+            };
+
+            RecordingStatus {
+                is_recording: true,
+                is_paused: session.paused,
+                duration_secs: duration,
+                frame_count: session.frame_count,
+                fps,
             }
-        } else {
-            elapsed
         }
-    } else {
-        0.0
-    };
-
-    let fps = if duration > 0.0 {
-        state.frame_count as f64 / duration
-    } else {
-        0.0
-    };
-
-    RecordingStatus {
-        is_recording,
-        is_paused,
-        duration_secs: duration,
-        frame_count: state.frame_count,
-        fps,
     }
 }

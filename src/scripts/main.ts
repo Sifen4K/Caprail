@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, emit } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { register, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -51,35 +51,31 @@ async function registerShortcuts() {
   }
 }
 
-async function openEditorWindow(data: { width: number; height: number; data: number[] }) {
+async function openEditorWindow(data: { path: string; width: number; height: number }) {
   // Entered editor — allow shortcuts again
   isCapturing = false;
 
-  const editorWindow = new WebviewWindow(`editor-${++editorCounter}`, {
-    url: "src/editor.html",
+  const encodedPath = encodeURIComponent(data.path);
+  new WebviewWindow(`editor-${++editorCounter}`, {
+    url: `src/editor.html?path=${encodedPath}`,
     width: Math.min(data.width + 40, 1600),
     height: Math.min(data.height + 80, 1000),
     center: true,
     title: "Screenshot Editor",
     resizable: true,
   });
-
-  editorWindow.once("tauri://created", async () => {
-    setTimeout(async () => {
-      await emit("load-screenshot", data);
-    }, 300);
-  });
 }
 
 let pinCounter = 0;
 
-async function openPinWindow(data: { data: number[]; width: number; height: number }) {
+async function openPinWindow(data: { path: string; width: number; height: number }) {
   // Pinned to screen — allow shortcuts again
   isCapturing = false;
 
   const id = `pin-${++pinCounter}`;
-  const pinWindow = new WebviewWindow(id, {
-    url: "src/pin.html",
+  const encodedPath = encodeURIComponent(data.path);
+  new WebviewWindow(id, {
+    url: `src/pin.html?path=${encodedPath}`,
     width: Math.min(data.width, 800),
     height: Math.min(data.height, 600),
     center: true,
@@ -89,12 +85,6 @@ async function openPinWindow(data: { data: number[]; width: number; height: numb
     skipTaskbar: true,
     resizable: false,
     title: "Pin",
-  });
-
-  pinWindow.once("tauri://created", async () => {
-    setTimeout(async () => {
-      await emit("load-pin-image", data);
-    }, 300);
   });
 }
 
@@ -114,7 +104,7 @@ async function openClipEditor(videoPath: string) {
 
 async function setup() {
   // Listen for screenshot captured from overlay
-  await listen<{ width: number; height: number; data: number[] }>(
+  await listen<{ path: string; width: number; height: number }>(
     "screenshot-captured",
     (event) => {
       updateStatus("Screenshot captured, opening editor...");
@@ -123,7 +113,7 @@ async function setup() {
   );
 
   // Listen for pin requests from editor
-  await listen<{ data: number[]; width: number; height: number }>(
+  await listen<{ path: string; width: number; height: number }>(
     "pin-screenshot",
     (event) => {
       updateStatus("Pinning screenshot...");

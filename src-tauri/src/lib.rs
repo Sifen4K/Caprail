@@ -42,6 +42,16 @@ pub fn run() {
 
     info!("Starting ScreenshotTool v{}", env!("CARGO_PKG_VERSION"));
 
+    // Clean up stale temp files from previous sessions
+    let temp_dir = capture::screenshot_temp_dir();
+    if temp_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -111,6 +121,8 @@ pub fn run() {
             capture::capture_window,
             capture::get_windows,
             capture::get_monitors,
+            capture::cleanup_temp_file,
+            capture::save_pin_image,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,

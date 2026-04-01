@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Pin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: transparent;
+      overflow: hidden;
+      cursor: move;
+    }
+    #pin-image {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    #pin-border {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      border: 2px solid rgba(76, 175, 80, 0.6);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    body:hover #pin-border {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="pin-image"></canvas>
+  <div id="pin-border"></div>
+  <script type="module" src="./scripts/pin.ts"></script>
+</body>
+</html>

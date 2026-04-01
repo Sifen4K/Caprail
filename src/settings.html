@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Settings</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #1e1e1e;
+      color: #fff;
+      padding: 24px;
+    }
+    h1 { font-size: 18px; margin-bottom: 20px; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 12px 0;
+    }
+    label { font-size: 14px; color: #ccc; }
+    input {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 4px;
+      width: 180px;
+    }
+    input:focus { outline: none; border-color: #6c6; }
+    select {
+      background: #2a2a2a;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 6px;
+      border-radius: 4px;
+    }
+    button {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 8px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    button:hover { background: #3a3a3a; }
+  </style>
+</head>
+<body>
+  <h1>Settings</h1>
+  <div class="row">
+    <label>Screenshot shortcut:</label>
+    <input id="screenshot-shortcut" value="Ctrl+Shift+A">
+  </div>
+  <div class="row">
+    <label>Record shortcut:</label>
+    <input id="record-shortcut" value="Ctrl+Shift+R">
+  </div>
+  <div class="row">
+    <label>Save path:</label>
+    <input id="save-path" value="">
+  </div>
+  <div class="row">
+    <label>Default format:</label>
+    <select id="default-format">
+      <option value="png">PNG</option>
+      <option value="jpg">JPG</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Auto-start on login:</label>
+    <input type="checkbox" id="auto-start">
+  </div>
+  <button id="save">Save</button>
+  <script type="module" src="./scripts/settings-page.ts"></script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Recording Editor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a1a;
+      color: #fff;
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #video-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #111;
+      overflow: hidden;
+    }
+    video {
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #controls {
+      padding: 12px 16px;
+      background: #2a2a2a;
+      border-top: 1px solid #444;
+    }
+    #timeline {
+      position: relative;
+      height: 40px;
+      background: #333;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    #timeline-progress {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      background: rgba(76, 175, 80, 0.3);
+      pointer-events: none;
+    }
+    #timeline-playhead {
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 100%;
+      background: #4CAF50;
+      pointer-events: none;
+    }
+    .trim-handle {
+      position: absolute;
+      top: 0;
+      width: 8px;
+      height: 100%;
+      background: #ff9800;
+      cursor: ew-resize;
+      z-index: 2;
+    }
+    #trim-start { left: 0; border-radius: 4px 0 0 4px; }
+    #trim-end { right: 0; border-radius: 0 4px 4px 0; }
+    .trim-region {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      background: rgba(255, 152, 0, 0.1);
+      pointer-events: none;
+    }
+    #control-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .ctrl-btn {
+      padding: 6px 12px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .ctrl-btn:hover { background: #3a3a3a; }
+    .ctrl-btn.primary { background: #4CAF50; border-color: #4CAF50; }
+    .ctrl-btn.primary:hover { background: #388E3C; }
+    select {
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    #time-display {
+      font-family: monospace;
+      font-size: 13px;
+      color: #aaa;
+    }
+    .spacer { flex: 1; }
+    #export-progress {
+      display: none;
+      margin-top: 8px;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #export-progress-bar {
+      height: 100%;
+      background: #4CAF50;
+      width: 0%;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <div id="video-container">
+    <video id="video"></video>
+  </div>
+  <div id="controls">
+    <div id="timeline">
+      <div class="trim-region" id="trim-region"></div>
+      <div id="timeline-progress"></div>
+      <div id="timeline-playhead"></div>
+      <div class="trim-handle" id="trim-start"></div>
+      <div class="trim-handle" id="trim-end"></div>
+    </div>
+    <div id="control-row">
+      <button class="ctrl-btn" id="play-btn">▶</button>
+      <span id="time-display">00:00 / 00:00</span>
+      <label>Speed:
+        <select id="speed-select">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+      </label>
+      <div class="spacer"></div>
+      <button class="ctrl-btn primary" id="export-mp4-btn">Export MP4</button>
+      <button class="ctrl-btn" id="export-gif-btn">Export GIF</button>
+    </div>
+    <div id="export-progress">
+      <div id="export-progress-bar"></div>
+    </div>
+  </div>
+  <script type="module" src="./scripts/clip-editor.ts"></script>
+</body>
+</html>

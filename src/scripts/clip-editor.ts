@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 
-const video = document.getElementById("video") as HTMLVideoElement;
+const canvas = document.getElementById("player-canvas") as HTMLCanvasElement;
+const ctx = canvas.getContext("2d")!;
 const playBtn = document.getElementById("play-btn")!;
 const timeDisplay = document.getElementById("time-display")!;
 const speedSelect = document.getElementById("speed-select") as HTMLSelectElement;
@@ -16,99 +17,248 @@ const exportGifBtn = document.getElementById("export-gif-btn")!;
 const exportProgress = document.getElementById("export-progress")!;
 const exportProgressBar = document.getElementById("export-progress-bar")!;
 
-let videoPath = "";
+let rawvPath = "";
+let totalFrames = 0;
+let fps = 30;
+let videoWidth = 0;
+let videoHeight = 0;
 let duration = 0;
-let trimStart = 0;
-let trimEnd = 0;
 
-// Load video from URL query parameter
+let currentFrame = 0;
+let trimStartFrame = 0;
+let trimEndFrame = 0;
+let isPlaying = false;
+let playbackSpeed = 1.0;
+let lastFrameTime = 0;
+let animFrameId = 0;
+
+// Frame cache for smooth playback
+const frameCache = new Map<number, ImageData>();
+const CACHE_AHEAD = 8;
+const MAX_CACHE_SIZE = 30;
+
+// In-flight fetch tracking
+const pendingFetches = new Set<number>();
+const MAX_INFLIGHT = 4;
+
+// ── Initialization ────────────────────────────────────────────────────
+
 const params = new URLSearchParams(window.location.search);
 const pathParam = params.get("path");
 
 if (pathParam) {
-  videoPath = pathParam;
+  rawvPath = pathParam;
 
-  // Load video as blob URL (reliable across all Tauri configurations)
-  readFile(videoPath)
-    .then((data) => {
-      const blob = new Blob([data], { type: "video/mp4" });
-      video.src = URL.createObjectURL(blob);
-    })
-    .catch((err) => {
-      console.error("Failed to read video file:", err);
-    });
+  invoke<{ width: number; height: number; fps: number; frameCount: number }>(
+    "get_recording_info",
+    { path: rawvPath }
+  )
+    .then((info) => {
+      videoWidth = info.width;
+      videoHeight = info.height;
+      fps = info.fps;
+      totalFrames = info.frameCount;
+      duration = totalFrames / fps;
+      trimEndFrame = totalFrames - 1;
 
-  video.addEventListener("loadedmetadata", () => {
-    if (video.duration && video.duration > 0 && isFinite(video.duration)) {
-      duration = video.duration;
-      trimEnd = duration;
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+
       updateTimeDisplay();
       updateTrimUI();
-    }
-  });
 
-  video.addEventListener("error", () => {
-    console.error("Video load error:", video.error);
-  });
-
-  // Get duration via ffprobe (reliable, as fallback/override)
-  invoke<number>("get_video_duration", { path: videoPath })
-    .then((d) => {
-      duration = d;
-      trimEnd = d;
-      updateTimeDisplay();
-      updateTrimUI();
+      // Render first frame
+      fetchAndRender(0);
     })
     .catch((err) => {
-      console.error("ffprobe duration failed:", err);
+      console.error("Failed to load recording info:", err);
     });
 } else {
-  console.error("No video path provided in URL");
+  console.error("No recording path provided in URL");
 }
 
-// Playback controls
-playBtn.addEventListener("click", () => {
-  if (video.paused) {
-    if (video.currentTime < trimStart || video.currentTime >= trimEnd) {
-      video.currentTime = trimStart;
+// Clean up rawv file when editor window closes
+window.addEventListener("beforeunload", () => {
+  if (rawvPath) {
+    invoke("cleanup_rawv_file", { path: rawvPath }).catch(() => {});
+  }
+});
+
+// ── Frame rendering ───────────────────────────────────────────────────
+
+async function fetchFrame(frameIndex: number): Promise<ImageData | null> {
+  if (frameCache.has(frameIndex)) {
+    return frameCache.get(frameIndex)!;
+  }
+
+  if (pendingFetches.has(frameIndex)) {
+    return null; // already being fetched
+  }
+
+  pendingFetches.add(frameIndex);
+
+  try {
+    // Rust returns Vec<u8> → arrives as ArrayBuffer (already RGBA-converted)
+    const buffer = await invoke<ArrayBuffer>("read_recording_frame", {
+      path: rawvPath,
+      frameIndex,
+    });
+
+    const bytes = new Uint8ClampedArray(buffer);
+    const imageData = new ImageData(bytes, videoWidth, videoHeight);
+
+    // Cache management: evict frames far from current position
+    if (frameCache.size >= MAX_CACHE_SIZE) {
+      const keys = [...frameCache.keys()];
+      for (const key of keys) {
+        if (Math.abs(key - frameIndex) > CACHE_AHEAD * 2) {
+          frameCache.delete(key);
+          if (frameCache.size < MAX_CACHE_SIZE) break;
+        }
+      }
+      if (frameCache.size >= MAX_CACHE_SIZE) {
+        // Remove the farthest key
+        let farthest = keys[0];
+        let maxDist = 0;
+        for (const key of keys) {
+          const dist = Math.abs(key - frameIndex);
+          if (dist > maxDist) { maxDist = dist; farthest = key; }
+        }
+        frameCache.delete(farthest);
+      }
     }
-    video.play();
-    playBtn.textContent = "⏸";
-  } else {
-    video.pause();
-    playBtn.textContent = "▶";
-  }
-});
 
-video.addEventListener("timeupdate", () => {
-  updateTimeDisplay();
+    frameCache.set(frameIndex, imageData);
+    return imageData;
+  } catch (err) {
+    console.error(`Failed to fetch frame ${frameIndex}:`, err);
+    return null;
+  } finally {
+    pendingFetches.delete(frameIndex);
+  }
+}
+
+/** Synchronous render from cache. Returns true if frame was available. */
+function renderFrameSync(frameIndex: number): boolean {
+  if (frameIndex < 0 || frameIndex >= totalFrames) return false;
+
+  const imageData = frameCache.get(frameIndex);
+  if (imageData) {
+    currentFrame = frameIndex;
+    ctx.putImageData(imageData, 0, 0);
+    updatePlayhead();
+    updateTimeDisplay();
+    return true;
+  }
+  return false;
+}
+
+/** Async: fetch frame, render, and prefetch ahead. Used for seek/init. */
+async function fetchAndRender(frameIndex: number) {
+  if (frameIndex < 0 || frameIndex >= totalFrames) return;
+  currentFrame = frameIndex;
+
+  const imageData = await fetchFrame(frameIndex);
+  if (imageData) {
+    ctx.putImageData(imageData, 0, 0);
+  }
+
   updatePlayhead();
+  updateTimeDisplay();
+  prefetchFrames(frameIndex);
+}
 
-  // Stop at trim end
-  if (video.currentTime >= trimEnd) {
-    video.pause();
-    video.currentTime = trimStart;
-    playBtn.textContent = "▶";
+function prefetchFrames(fromFrame: number) {
+  for (let i = 1; i <= CACHE_AHEAD; i++) {
+    if (pendingFetches.size >= MAX_INFLIGHT) break;
+
+    const idx = fromFrame + i;
+    if (idx < totalFrames && !frameCache.has(idx) && !pendingFetches.has(idx)) {
+      fetchFrame(idx); // fire-and-forget
+    }
   }
-});
+}
 
-video.addEventListener("pause", () => {
-  playBtn.textContent = "▶";
-});
+// ── Playback engine ───────────────────────────────────────────────────
 
-video.addEventListener("play", () => {
+function startPlayback() {
+  if (isPlaying) return;
+  isPlaying = true;
   playBtn.textContent = "⏸";
+
+  if (currentFrame < trimStartFrame || currentFrame >= trimEndFrame) {
+    currentFrame = trimStartFrame;
+  }
+
+  // Prefetch initial batch
+  prefetchFrames(currentFrame);
+
+  lastFrameTime = performance.now();
+  playbackLoop();
+}
+
+function stopPlayback() {
+  isPlaying = false;
+  playBtn.textContent = "▶";
+  if (animFrameId) {
+    cancelAnimationFrame(animFrameId);
+    animFrameId = 0;
+  }
+}
+
+function playbackLoop() {
+  if (!isPlaying) return;
+
+  animFrameId = requestAnimationFrame((now) => {
+    const frameDuration = 1000 / (fps * playbackSpeed);
+    const elapsed = now - lastFrameTime;
+
+    if (elapsed >= frameDuration) {
+      const framesToAdvance = Math.max(1, Math.floor(elapsed / frameDuration));
+      const nextFrame = currentFrame + framesToAdvance;
+
+      if (nextFrame >= trimEndFrame) {
+        renderFrameSync(trimStartFrame) || fetchAndRender(trimStartFrame);
+        stopPlayback();
+        return;
+      }
+
+      // Synchronous render from cache — skip frame if not cached yet
+      if (renderFrameSync(nextFrame)) {
+        lastFrameTime = now - (elapsed % frameDuration);
+      }
+      // Even if cache miss, advance currentFrame so we don't stall
+      currentFrame = nextFrame;
+
+      // Keep prefetching ahead
+      prefetchFrames(nextFrame);
+    }
+
+    playbackLoop();
+  });
+}
+
+// ── Controls ──────────────────────────────────────────────────────────
+
+playBtn.addEventListener("click", () => {
+  if (isPlaying) {
+    stopPlayback();
+  } else {
+    startPlayback();
+  }
 });
 
 speedSelect.addEventListener("change", () => {
-  video.playbackRate = parseFloat(speedSelect.value);
+  playbackSpeed = parseFloat(speedSelect.value);
 });
 
 // Timeline click to seek
 timeline.addEventListener("click", (e) => {
+  if ((e.target as HTMLElement).classList.contains("trim-handle")) return;
   const rect = timeline.getBoundingClientRect();
   const ratio = (e.clientX - rect.left) / rect.width;
-  video.currentTime = ratio * duration;
+  const targetFrame = Math.round(ratio * (totalFrames - 1));
+  fetchAndRender(Math.max(0, Math.min(totalFrames - 1, targetFrame)));
 });
 
 // Trim handles
@@ -128,12 +278,12 @@ document.addEventListener("mousemove", (e) => {
   if (!draggingTrim) return;
   const rect = timeline.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  const time = ratio * duration;
+  const frame = Math.round(ratio * (totalFrames - 1));
 
   if (draggingTrim === "start") {
-    trimStart = Math.min(time, trimEnd - 0.1);
+    trimStartFrame = Math.min(frame, trimEndFrame - 1);
   } else {
-    trimEnd = Math.max(time, trimStart + 0.1);
+    trimEndFrame = Math.max(frame, trimStartFrame + 1);
   }
 
   updateTrimUI();
@@ -144,17 +294,19 @@ document.addEventListener("mouseup", () => {
   draggingTrim = null;
 });
 
+// ── UI updates ────────────────────────────────────────────────────────
+
 function updatePlayhead() {
-  if (duration > 0) {
-    const ratio = video.currentTime / duration;
+  if (totalFrames > 0) {
+    const ratio = currentFrame / (totalFrames - 1);
     playhead.style.left = `${ratio * 100}%`;
   }
 }
 
 function updateTrimUI() {
-  if (duration <= 0) return;
-  const startRatio = trimStart / duration;
-  const endRatio = trimEnd / duration;
+  if (totalFrames <= 0) return;
+  const startRatio = trimStartFrame / (totalFrames - 1);
+  const endRatio = trimEndFrame / (totalFrames - 1);
   trimStartHandle.style.left = `${startRatio * 100}%`;
   trimEndHandle.style.left = `${endRatio * 100 - 1}%`;
   trimRegion.style.left = `${startRatio * 100}%`;
@@ -168,13 +320,20 @@ function formatTime(secs: number): string {
 }
 
 function updateTimeDisplay() {
-  timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(duration)} [${formatTime(trimStart)} - ${formatTime(trimEnd)}]`;
+  const currentTime = currentFrame / fps;
+  const trimStartTime = trimStartFrame / fps;
+  const trimEndTime = trimEndFrame / fps;
+  timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(duration)} [${formatTime(trimStartTime)} - ${formatTime(trimEndTime)}]`;
 }
 
-// Export
+// ── Export ─────────────────────────────────────────────────────────────
+
+let unlistenProgress: UnlistenFn | null = null;
+let unlistenComplete: UnlistenFn | null = null;
+
 async function doExport(format: "mp4" | "gif") {
   const ext = format;
-  const defaultName = videoPath.replace(/\.[^.]+$/, `-edited.${ext}`);
+  const defaultName = `recording-export.${ext}`;
 
   const outputPath = await save({
     defaultPath: defaultName,
@@ -184,28 +343,54 @@ async function doExport(format: "mp4" | "gif") {
   if (!outputPath) return;
 
   exportProgress.style.display = "block";
-  exportProgressBar.style.width = "50%";
+  exportProgressBar.style.width = "0%";
+
+  // Listen for progress events
+  unlistenProgress = await listen<{ progress: number }>(
+    "export-progress",
+    (event) => {
+      exportProgressBar.style.width = `${event.payload.progress * 100}%`;
+    }
+  );
+
+  unlistenComplete = await listen<{ success: boolean; outputPath?: string; error?: string }>(
+    "export-complete",
+    (event) => {
+      if (event.payload.success) {
+        exportProgressBar.style.width = "100%";
+        setTimeout(() => {
+          exportProgress.style.display = "none";
+          exportProgressBar.style.width = "0%";
+        }, 1500);
+      } else {
+        console.error("Export failed:", event.payload.error);
+        exportProgress.style.display = "none";
+        exportProgressBar.style.width = "0%";
+      }
+
+      // Cleanup listeners
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenComplete) unlistenComplete();
+      unlistenProgress = null;
+      unlistenComplete = null;
+    }
+  );
 
   try {
     await invoke("export_video", {
       config: {
-        inputPath: videoPath,
+        inputPath: rawvPath,
         outputPath,
-        startTime: trimStart,
-        endTime: trimEnd,
-        speed: parseFloat(speedSelect.value),
+        startFrame: trimStartFrame,
+        endFrame: trimEndFrame,
+        speed: playbackSpeed,
         format,
         gifFps: format === "gif" ? 15 : null,
         gifMaxWidth: format === "gif" ? 640 : null,
       },
     });
-    exportProgressBar.style.width = "100%";
-    setTimeout(() => {
-      exportProgress.style.display = "none";
-      exportProgressBar.style.width = "0%";
-    }, 1500);
   } catch (err) {
-    console.error("Export failed:", err);
+    console.error("Export invocation failed:", err);
     exportProgress.style.display = "none";
     exportProgressBar.style.width = "0%";
   }

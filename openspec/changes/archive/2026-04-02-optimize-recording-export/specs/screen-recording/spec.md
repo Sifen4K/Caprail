@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: 区域录屏
 系统 SHALL 支持用户选择屏幕矩形区域进行录制。录制过程 SHALL 将原始 BGRA 帧直接写入临时 `.rawv` 文件，不启动 FFmpeg 进程。录制状态 SHALL 通过结构化的 `RecordingSession` 管理。
 
@@ -16,13 +18,6 @@
 #### Scenario: 录制状态查询
 - **WHEN** 系统需要判断是否正在录制
 - **THEN** SHALL 通过检查 `Option<RecordingSession>` 是否为 `Some` 来判断
-
-### Requirement: 全屏录制
-系统 SHALL 支持录制当前显示器的全屏画面。
-
-#### Scenario: 全屏录制
-- **WHEN** 用户在录屏选区界面选择全屏模式
-- **THEN** 系统录制鼠标所在显示器的完整画面
 
 ### Requirement: 高性能录制
 录制引擎 SHALL 将原始 BGRA 帧通过 `BufWriter` 写入磁盘，写入带宽需求约为 `width * height * 4 * fps` 字节/秒。

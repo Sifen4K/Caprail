@@ -30,7 +30,6 @@ tracing-appender = "0.2"
 once_cell = "1"
 dirs = "5"
 image = "0.25"
-base64 = "0.22"
 
 # Windows-specific
 [target.'cfg(windows)'.dependencies]

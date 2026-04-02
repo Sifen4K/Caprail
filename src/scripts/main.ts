@@ -139,11 +139,11 @@ async function setup() {
       const { x, y, width, height } = event.payload;
       updateStatus("Starting recording...");
 
-      const config = await invoke<{ save_path: string }>("load_config");
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const outputPath = `${config.save_path}\\recording-${timestamp}.mp4`;
-
       try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        const tempDir = await invoke<string>("get_temp_recording_dir");
+        const outputPath = `${tempDir}/recording-${timestamp}.rawv`;
+
         await invoke("start_recording", {
           config: { x, y, width, height, fps: 30, outputPath },
         });

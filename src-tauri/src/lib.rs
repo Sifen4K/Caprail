@@ -52,6 +52,20 @@ pub fn run() {
         }
     }
 
+    // Clean up stale rawv recording files from previous sessions
+    let rawv_temp_dir = std::env::temp_dir().join("ScreenshotTool").join("recordings");
+    if rawv_temp_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&rawv_temp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "rawv") {
+                    info!("Cleaning up stale rawv file: {}", path.display());
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -128,8 +142,11 @@ pub fn run() {
             recording::pause_recording,
             recording::resume_recording,
             recording::get_recording_status,
+            recording::get_recording_info,
+            recording::read_recording_frame,
+            recording::get_temp_recording_dir,
+            recording::cleanup_rawv_file,
             export::export_video,
-            export::get_video_duration,
             ocr::ocr_recognize,
         ])
         .on_window_event(|window, event| {

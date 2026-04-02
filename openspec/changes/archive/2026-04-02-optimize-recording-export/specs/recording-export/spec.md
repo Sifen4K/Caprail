@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: MP4 导出
 系统 SHALL 从 `.rawv` 原始帧文件读取帧数据，通过管道传给 FFmpeg 编码为 H.264 MP4 文件。导出 SHALL 异步执行。
 

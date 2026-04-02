@@ -33,9 +33,10 @@ pub fn screenshot_temp_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("screenshot-tool-captures")
 }
 
-/// Save BGRA pixel data as a PNG file in the temp directory. Returns the file path.
-fn save_capture_as_png(data: &[u8], width: u32, height: u32) -> Result<String, String> {
-    use image::{ImageBuffer, Rgba};
+/// Save BGRA pixel data as an uncompressed BMP file in the temp directory.
+/// BMP with BI_RGB 32-bit natively stores BGRA, so no pixel format conversion is needed.
+fn save_capture_as_bmp(data: &[u8], width: u32, height: u32) -> Result<String, String> {
+    use std::io::Write;
 
     let temp_dir = screenshot_temp_dir();
     std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -44,15 +45,37 @@ fn save_capture_as_png(data: &[u8], width: u32, height: u32) -> Result<String, S
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let path = temp_dir.join(format!("capture-{}.png", timestamp));
+    let path = temp_dir.join(format!("capture-{}.bmp", timestamp));
 
-    // Convert BGRA to RGBA in-place during ImageBuffer construction
-    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
-        let i = ((y * width + x) * 4) as usize;
-        Rgba([data[i + 2], data[i + 1], data[i], data[i + 3]]) // BGRA → RGBA
-    });
+    let data_size = data.len() as u32;
+    let file_size = 54u32 + data_size;
 
-    img.save(&path).map_err(|e| format!("Failed to save PNG: {}", e))?;
+    let mut header = Vec::with_capacity(54);
+    // BITMAPFILEHEADER (14 bytes)
+    header.extend_from_slice(&[0x42, 0x4D]); // 'BM'
+    header.extend_from_slice(&file_size.to_le_bytes());
+    header.extend_from_slice(&0u16.to_le_bytes()); // reserved1
+    header.extend_from_slice(&0u16.to_le_bytes()); // reserved2
+    header.extend_from_slice(&54u32.to_le_bytes()); // offset to pixel data
+    // BITMAPINFOHEADER (40 bytes)
+    header.extend_from_slice(&40u32.to_le_bytes()); // header size
+    header.extend_from_slice(&(width as i32).to_le_bytes());
+    header.extend_from_slice(&(-(height as i32)).to_le_bytes()); // negative = top-down
+    header.extend_from_slice(&1u16.to_le_bytes()); // planes
+    header.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    header.extend_from_slice(&0u32.to_le_bytes()); // compression = BI_RGB
+    header.extend_from_slice(&data_size.to_le_bytes());
+    header.extend_from_slice(&0i32.to_le_bytes()); // x pixels per meter
+    header.extend_from_slice(&0i32.to_le_bytes()); // y pixels per meter
+    header.extend_from_slice(&0u32.to_le_bytes()); // colors used
+    header.extend_from_slice(&0u32.to_le_bytes()); // important colors
+
+    let mut file = std::fs::File::create(&path)
+        .map_err(|e| format!("Failed to create BMP file: {}", e))?;
+    file.write_all(&header)
+        .map_err(|e| format!("Failed to write BMP header: {}", e))?;
+    file.write_all(data)
+        .map_err(|e| format!("Failed to write BMP data: {}", e))?;
 
     Ok(path.to_string_lossy().to_string())
 }
@@ -286,7 +309,7 @@ pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
         let height = info.monitorInfo.rcMonitor.bottom - y;
 
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_png(&bgra_data, width as u32, height as u32)?;
+        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
 
         Ok(CaptureResult {
             path,
@@ -306,7 +329,7 @@ pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<Capture
     #[cfg(windows)]
     {
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_png(&bgra_data, width as u32, height as u32)?;
+        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
 
         Ok(CaptureResult {
             path,
@@ -340,7 +363,7 @@ pub fn capture_window(hwnd: usize) -> Result<CaptureResult, String> {
         let height = rect.bottom - y;
 
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_png(&bgra_data, width as u32, height as u32)?;
+        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
 
         Ok(CaptureResult {
             path,

@@ -1,6 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { ToolType, StampType, EditorState } from "./editor-types";
-import { redrawAll, setupCanvasHandlers } from "./editor-canvas";
+import { redrawAll, setupCanvasHandlers, bakeBuffer } from "./editor-canvas";
 import { undo, redo } from "./editor-history";
 import { copyToClipboard, saveToFile, pinToScreen, performOcr } from "./editor-output";
 
@@ -24,9 +24,16 @@ const state: EditorState = {
   screenshotPath: null,
   canvas,
   ctx,
+  bufferCanvas: null,
+  bufferCtx: null,
+  baseCanvas: null,
 };
 
 const redraw = () => redrawAll(state);
+const bakeAndRedraw = () => {
+  bakeBuffer(state);
+  redrawAll(state);
+};
 
 // --- Image Loading ---
 
@@ -44,6 +51,22 @@ async function loadScreenshot() {
     canvas.height = img.naturalHeight;
     ctx.drawImage(img, 0, 0);
     state.baseImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Create buffer canvas for layered rendering
+    const bufferCanvas = document.createElement("canvas");
+    bufferCanvas.width = canvas.width;
+    bufferCanvas.height = canvas.height;
+    state.bufferCanvas = bufferCanvas;
+    state.bufferCtx = bufferCanvas.getContext("2d")!;
+
+    // Create base canvas for mosaic source
+    const baseCanvas = document.createElement("canvas");
+    baseCanvas.width = canvas.width;
+    baseCanvas.height = canvas.height;
+    baseCanvas.getContext("2d")!.putImageData(state.baseImageData, 0, 0);
+    state.baseCanvas = baseCanvas;
+
+    bakeBuffer(state);
   };
   img.src = assetUrl;
 }
@@ -52,7 +75,7 @@ loadScreenshot();
 
 // --- Canvas event handlers ---
 
-setupCanvasHandlers(state, redraw);
+setupCanvasHandlers(state, redraw, bakeAndRedraw);
 
 // --- Toolbar ---
 
@@ -97,8 +120,8 @@ document.querySelectorAll(".stamp-btn").forEach((btn) => {
   state.currentFontSize = parseInt((e.target as HTMLInputElement).value);
 });
 
-document.getElementById("undo-btn")!.addEventListener("click", () => undo(state, redraw));
-document.getElementById("redo-btn")!.addEventListener("click", () => redo(state, redraw));
+document.getElementById("undo-btn")!.addEventListener("click", () => undo(state, bakeAndRedraw));
+document.getElementById("redo-btn")!.addEventListener("click", () => redo(state, bakeAndRedraw));
 document.getElementById("copy-btn")!.addEventListener("click", () => copyToClipboard(state, redraw));
 document.getElementById("save-btn")!.addEventListener("click", () => saveToFile(state, redraw));
 document.getElementById("pin-btn")!.addEventListener("click", () => pinToScreen(state, redraw));
@@ -121,10 +144,10 @@ document.getElementById("ocr-copy-btn")!.addEventListener("click", async () => {
 window.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.key === "z") {
     e.preventDefault();
-    undo(state, redraw);
+    undo(state, bakeAndRedraw);
   } else if (e.ctrlKey && e.key === "y") {
     e.preventDefault();
-    redo(state, redraw);
+    redo(state, bakeAndRedraw);
   } else if (e.ctrlKey && e.key === "c") {
     e.preventDefault();
     copyToClipboard(state, redraw);

@@ -35,4 +35,7 @@ export interface EditorState {
   screenshotPath: string | null;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  bufferCanvas: HTMLCanvasElement | null;
+  bufferCtx: CanvasRenderingContext2D | null;
+  baseCanvas: HTMLCanvasElement | null;
 }

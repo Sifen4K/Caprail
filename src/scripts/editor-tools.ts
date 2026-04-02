@@ -104,32 +104,31 @@ function drawArrow(
 }
 
 function applyMosaic(state: EditorState, x: number, y: number, w: number, h: number) {
-  if (!state.baseImageData) return;
+  if (!state.baseCanvas) return;
   const { ctx } = state;
   const blockSize = 10;
   const sx = Math.max(0, Math.round(x));
   const sy = Math.max(0, Math.round(y));
-  const ex = Math.min(state.baseImageData.width, Math.round(x + w));
-  const ey = Math.min(state.baseImageData.height, Math.round(y + h));
+  const ex = Math.min(state.baseCanvas.width, Math.round(x + w));
+  const ey = Math.min(state.baseCanvas.height, Math.round(y + h));
+  const sw = ex - sx;
+  const sh = ey - sy;
+  if (sw <= 0 || sh <= 0) return;
 
-  for (let by = sy; by < ey; by += blockSize) {
-    for (let bx = sx; bx < ex; bx += blockSize) {
-      let r = 0, g = 0, b = 0, count = 0;
-      for (let py = by; py < Math.min(by + blockSize, ey); py++) {
-        for (let px = bx; px < Math.min(bx + blockSize, ex); px++) {
-          const i = (py * state.baseImageData.width + px) * 4;
-          r += state.baseImageData.data[i];
-          g += state.baseImageData.data[i + 1];
-          b += state.baseImageData.data[i + 2];
-          count++;
-        }
-      }
-      if (count > 0) {
-        ctx.fillStyle = `rgb(${Math.round(r / count)},${Math.round(g / count)},${Math.round(b / count)})`;
-        ctx.fillRect(bx, by, Math.min(blockSize, ex - bx), Math.min(blockSize, ey - by));
-      }
-    }
-  }
+  const reducedW = Math.max(1, Math.ceil(sw / blockSize));
+  const reducedH = Math.max(1, Math.ceil(sh / blockSize));
+
+  // Scale down from base image (averages pixels)
+  const small = document.createElement("canvas");
+  small.width = reducedW;
+  small.height = reducedH;
+  const sCtx = small.getContext("2d")!;
+  sCtx.drawImage(state.baseCanvas, sx, sy, sw, sh, 0, 0, reducedW, reducedH);
+
+  // Scale back up with nearest-neighbor interpolation
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(small, 0, 0, reducedW, reducedH, sx, sy, sw, sh);
+  ctx.imageSmoothingEnabled = true;
 }
 
 function applyBlur(state: EditorState, x: number, y: number, w: number, h: number) {

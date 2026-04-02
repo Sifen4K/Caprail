@@ -10,16 +10,36 @@ export function getCanvasPos(canvas: HTMLCanvasElement, e: MouseEvent) {
   };
 }
 
-export function redrawAll(state: EditorState) {
-  const { ctx, canvas } = state;
-  if (state.baseImageData) {
-    ctx.putImageData(state.baseImageData, 0, 0);
-  } else {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
+export function bakeBuffer(state: EditorState) {
+  if (!state.baseImageData || !state.bufferCanvas || !state.bufferCtx) return;
 
+  const origCtx = state.ctx;
+  const origCanvas = state.canvas;
+
+  state.ctx = state.bufferCtx;
+  state.canvas = state.bufferCanvas;
+
+  state.bufferCtx.putImageData(state.baseImageData, 0, 0);
   for (const ann of state.annotations) {
     drawAnnotation(state, ann);
+  }
+
+  state.ctx = origCtx;
+  state.canvas = origCanvas;
+}
+
+export function redrawAll(state: EditorState) {
+  const { ctx, canvas } = state;
+
+  if (state.bufferCanvas) {
+    ctx.drawImage(state.bufferCanvas, 0, 0);
+  } else if (state.baseImageData) {
+    ctx.putImageData(state.baseImageData, 0, 0);
+    for (const ann of state.annotations) {
+      drawAnnotation(state, ann);
+    }
+  } else {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
   if (state.currentAnnotation) {
@@ -27,17 +47,17 @@ export function redrawAll(state: EditorState) {
   }
 }
 
-export function setupCanvasHandlers(state: EditorState, redraw: () => void) {
+export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAnnotationChange: () => void) {
   const { canvas } = state;
 
   canvas.addEventListener("mousedown", (e) => {
     if (state.currentTool === "text") {
-      showTextInput(state, e, redraw);
+      showTextInput(state, e, onAnnotationChange);
       return;
     }
 
     if (state.currentTool === "stamp") {
-      placeStamp(state, e, redraw);
+      placeStamp(state, e, onAnnotationChange);
       return;
     }
 
@@ -133,7 +153,7 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void) {
     state.annotations.push(state.currentAnnotation);
     state.redoStack.length = 0;
     state.currentAnnotation = null;
-    redraw();
+    onAnnotationChange();
   });
 }
 

@@ -88,12 +88,11 @@ async function openPinWindow(data: { path: string; width: number; height: number
   });
 }
 
-async function openClipEditor(videoPath: string) {
+async function openClipEditor() {
   isCapturing = false;
 
-  const encodedPath = encodeURIComponent(videoPath);
   new WebviewWindow("clip-editor", {
-    url: `src/clip-editor.html?path=${encodedPath}`,
+    url: `src/clip-editor.html`,
     width: 900,
     height: 650,
     center: true,
@@ -140,12 +139,8 @@ async function setup() {
       updateStatus("Starting recording...");
 
       try {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        const tempDir = await invoke<string>("get_temp_recording_dir");
-        const outputPath = `${tempDir}/recording-${timestamp}.rawv`;
-
         await invoke("start_recording", {
-          config: { x, y, width, height, fps: 30, outputPath },
+          config: { x, y, width, height, fps: 30 },
         });
 
         // Open recording control bar
@@ -170,9 +165,9 @@ async function setup() {
   );
 
   // Listen for recording stopped
-  await listen<{ path: string }>("recording-stopped", (event) => {
-    updateStatus(`Recording saved: ${event.payload.path}`);
-    openClipEditor(event.payload.path);
+  await listen("recording-stopped", () => {
+    updateStatus("Recording stopped, opening editor...");
+    openClipEditor();
   });
 
   await listen("tray-screenshot", () => {

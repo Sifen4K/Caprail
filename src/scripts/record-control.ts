@@ -83,8 +83,8 @@ pauseBtn.addEventListener("click", async () => {
 stopBtn.addEventListener("click", async () => {
   clearInterval(statusInterval);
   try {
-    const outputPath = await invoke<string>("stop_recording");
-    await emit("recording-stopped", { path: outputPath });
+    await invoke("stop_recording");
+    await emit("recording-stopped", {});
   } catch (err) {
     console.error("Stop recording failed:", err);
   }

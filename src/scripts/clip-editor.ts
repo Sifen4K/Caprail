@@ -17,7 +17,6 @@ const exportGifBtn = document.getElementById("export-gif-btn")!;
 const exportProgress = document.getElementById("export-progress")!;
 const exportProgressBar = document.getElementById("export-progress-bar")!;
 
-let rawvPath = "";
 let totalFrames = 0;
 let fps = 30;
 let videoWidth = 0;
@@ -43,45 +42,33 @@ const MAX_INFLIGHT = 4;
 
 // ── Initialization ────────────────────────────────────────────────────
 
-const params = new URLSearchParams(window.location.search);
-const pathParam = params.get("path");
+invoke<{ width: number; height: number; fps: number; frameCount: number }>(
+  "get_recording_info"
+)
+  .then((info) => {
+    videoWidth = info.width;
+    videoHeight = info.height;
+    fps = info.fps;
+    totalFrames = info.frameCount;
+    duration = totalFrames / fps;
+    trimEndFrame = totalFrames - 1;
 
-if (pathParam) {
-  rawvPath = pathParam;
+    canvas.width = videoWidth;
+    canvas.height = videoHeight;
 
-  invoke<{ width: number; height: number; fps: number; frameCount: number }>(
-    "get_recording_info",
-    { path: rawvPath }
-  )
-    .then((info) => {
-      videoWidth = info.width;
-      videoHeight = info.height;
-      fps = info.fps;
-      totalFrames = info.frameCount;
-      duration = totalFrames / fps;
-      trimEndFrame = totalFrames - 1;
+    updateTimeDisplay();
+    updateTrimUI();
 
-      canvas.width = videoWidth;
-      canvas.height = videoHeight;
+    // Render first frame
+    fetchAndRender(0);
+  })
+  .catch((err) => {
+    console.error("Failed to load recording info:", err);
+  });
 
-      updateTimeDisplay();
-      updateTrimUI();
-
-      // Render first frame
-      fetchAndRender(0);
-    })
-    .catch((err) => {
-      console.error("Failed to load recording info:", err);
-    });
-} else {
-  console.error("No recording path provided in URL");
-}
-
-// Clean up rawv file when editor window closes
+// Free in-memory frames when editor window closes
 window.addEventListener("beforeunload", () => {
-  if (rawvPath) {
-    invoke("cleanup_rawv_file", { path: rawvPath }).catch(() => {});
-  }
+  invoke("cleanup_recording").catch(() => {});
 });
 
 // ── Frame rendering ───────────────────────────────────────────────────
@@ -98,9 +85,7 @@ async function fetchFrame(frameIndex: number): Promise<ImageData | null> {
   pendingFetches.add(frameIndex);
 
   try {
-    // Rust returns Vec<u8> → arrives as ArrayBuffer (already RGBA-converted)
     const buffer = await invoke<ArrayBuffer>("read_recording_frame", {
-      path: rawvPath,
       frameIndex,
     });
 
@@ -117,7 +102,6 @@ async function fetchFrame(frameIndex: number): Promise<ImageData | null> {
         }
       }
       if (frameCache.size >= MAX_CACHE_SIZE) {
-        // Remove the farthest key
         let farthest = keys[0];
         let maxDist = 0;
         for (const key of keys) {
@@ -184,13 +168,12 @@ function prefetchFrames(fromFrame: number) {
 function startPlayback() {
   if (isPlaying) return;
   isPlaying = true;
-  playBtn.textContent = "⏸";
+  playBtn.textContent = "\u23F8";
 
   if (currentFrame < trimStartFrame || currentFrame >= trimEndFrame) {
     currentFrame = trimStartFrame;
   }
 
-  // Prefetch initial batch
   prefetchFrames(currentFrame);
 
   lastFrameTime = performance.now();
@@ -199,7 +182,7 @@ function startPlayback() {
 
 function stopPlayback() {
   isPlaying = false;
-  playBtn.textContent = "▶";
+  playBtn.textContent = "\u25B6";
   if (animFrameId) {
     cancelAnimationFrame(animFrameId);
     animFrameId = 0;
@@ -223,14 +206,11 @@ function playbackLoop() {
         return;
       }
 
-      // Synchronous render from cache — skip frame if not cached yet
       if (renderFrameSync(nextFrame)) {
         lastFrameTime = now - (elapsed % frameDuration);
       }
-      // Even if cache miss, advance currentFrame so we don't stall
       currentFrame = nextFrame;
 
-      // Keep prefetching ahead
       prefetchFrames(nextFrame);
     }
 
@@ -252,7 +232,6 @@ speedSelect.addEventListener("change", () => {
   playbackSpeed = parseFloat(speedSelect.value);
 });
 
-// Timeline click to seek
 timeline.addEventListener("click", (e) => {
   if ((e.target as HTMLElement).classList.contains("trim-handle")) return;
   const rect = timeline.getBoundingClientRect();
@@ -261,7 +240,6 @@ timeline.addEventListener("click", (e) => {
   fetchAndRender(Math.max(0, Math.min(totalFrames - 1, targetFrame)));
 });
 
-// Trim handles
 let draggingTrim: "start" | "end" | null = null;
 
 trimStartHandle.addEventListener("mousedown", (e) => {
@@ -345,7 +323,6 @@ async function doExport(format: "mp4" | "gif") {
   exportProgress.style.display = "block";
   exportProgressBar.style.width = "0%";
 
-  // Listen for progress events
   unlistenProgress = await listen<{ progress: number }>(
     "export-progress",
     (event) => {
@@ -368,7 +345,6 @@ async function doExport(format: "mp4" | "gif") {
         exportProgressBar.style.width = "0%";
       }
 
-      // Cleanup listeners
       if (unlistenProgress) unlistenProgress();
       if (unlistenComplete) unlistenComplete();
       unlistenProgress = null;
@@ -379,7 +355,6 @@ async function doExport(format: "mp4" | "gif") {
   try {
     await invoke("export_video", {
       config: {
-        inputPath: rawvPath,
         outputPath,
         startFrame: trimStartFrame,
         endFrame: trimEndFrame,

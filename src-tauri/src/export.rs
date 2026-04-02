@@ -1,17 +1,16 @@
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 
-use crate::recording::{read_rawv_header, RAWV_HEADER_SIZE};
+use crate::recording::COMPLETED_RECORDING;
 
 static EXPORTING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportConfig {
-    pub input_path: String,   // path to .rawv file
     pub output_path: String,
     pub start_frame: u32,
     pub end_frame: u32,
@@ -39,16 +38,14 @@ struct ExportComplete {
 
 #[tauri::command]
 pub fn export_video(app: AppHandle, config: ExportConfig) -> Result<(), String> {
-    // Atomic compare_exchange to prevent TOCTOU race
     if EXPORTING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Err("Already exporting".to_string());
     }
 
-    // Spawn async export in background
     std::thread::spawn(move || {
         let result = match config.format.as_str() {
-            "gif" => export_gif_from_rawv(&app, &config),
-            _ => export_mp4_from_rawv(&app, &config),
+            "gif" => export_gif(&app, &config),
+            _ => export_mp4(&app, &config),
         };
 
         let complete = match result {
@@ -71,9 +68,15 @@ pub fn export_video(app: AppHandle, config: ExportConfig) -> Result<(), String> 
     Ok(())
 }
 
-fn export_mp4_from_rawv(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
-    let info = read_rawv_header(&config.input_path)?;
-    let frame_size = (info.width * info.height * 4) as usize;
+/// Read recording metadata from the in-memory store.
+fn read_recording_meta() -> Result<(u32, u32, u32, usize), String> {
+    let store = COMPLETED_RECORDING.read().unwrap();
+    let rec = store.as_ref().ok_or("No recording available")?;
+    Ok((rec.width, rec.height, rec.fps, rec.frames.len()))
+}
+
+fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
+    let (width, height, fps, _total) = read_recording_meta()?;
     let total_frames = (config.end_frame - config.start_frame) as u64;
 
     let mut vf_filters: Vec<String> = Vec::new();
@@ -85,8 +88,8 @@ fn export_mp4_from_rawv(app: &AppHandle, config: &ExportConfig) -> Result<(), St
         "-y".to_string(),
         "-f".to_string(), "rawvideo".to_string(),
         "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", info.width, info.height),
-        "-framerate".to_string(), info.fps.to_string(),
+        "-video_size".to_string(), format!("{}x{}", width, height),
+        "-framerate".to_string(), fps.to_string(),
         "-i".to_string(), "pipe:0".to_string(),
     ];
 
@@ -102,12 +105,11 @@ fn export_mp4_from_rawv(app: &AppHandle, config: &ExportConfig) -> Result<(), St
         config.output_path.clone(),
     ]);
 
-    pipe_rawv_to_ffmpeg(app, config, frame_size, total_frames, &args)
+    pipe_frames_to_ffmpeg(app, config, total_frames, &args, 0.0, 1.0)
 }
 
-fn export_gif_from_rawv(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
-    let info = read_rawv_header(&config.input_path)?;
-    let frame_size = (info.width * info.height * 4) as usize;
+fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
+    let (width, height, fps, _total) = read_recording_meta()?;
     let total_frames = (config.end_frame - config.start_frame) as u64;
     let gif_fps = config.gif_fps.unwrap_or(15);
     let max_width = config.gif_max_width.unwrap_or(640);
@@ -127,55 +129,37 @@ fn export_gif_from_rawv(app: &AppHandle, config: &ExportConfig) -> Result<(), St
         "-y".to_string(),
         "-f".to_string(), "rawvideo".to_string(),
         "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", info.width, info.height),
-        "-framerate".to_string(), info.fps.to_string(),
+        "-video_size".to_string(), format!("{}x{}", width, height),
+        "-framerate".to_string(), fps.to_string(),
         "-i".to_string(), "pipe:0".to_string(),
         "-vf".to_string(), format!("{},palettegen", filter),
         palette_path.clone(),
     ];
 
-    // Use half progress for palette generation
-    pipe_rawv_to_ffmpeg_with_progress_range(
-        app, config, frame_size, total_frames, &palette_args, 0.0, 0.5,
-    )?;
+    pipe_frames_to_ffmpeg(app, config, total_frames, &palette_args, 0.0, 0.5)?;
 
     // Step 2: Generate GIF using palette
     let gif_args = vec![
         "-y".to_string(),
         "-f".to_string(), "rawvideo".to_string(),
         "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", info.width, info.height),
-        "-framerate".to_string(), info.fps.to_string(),
+        "-video_size".to_string(), format!("{}x{}", width, height),
+        "-framerate".to_string(), fps.to_string(),
         "-i".to_string(), "pipe:0".to_string(),
         "-i".to_string(), palette_path.clone(),
         "-lavfi".to_string(), format!("{} [x]; [x][1:v] paletteuse", filter),
         config.output_path.clone(),
     ];
 
-    pipe_rawv_to_ffmpeg_with_progress_range(
-        app, config, frame_size, total_frames, &gif_args, 0.5, 1.0,
-    )?;
+    pipe_frames_to_ffmpeg(app, config, total_frames, &gif_args, 0.5, 1.0)?;
 
-    // Clean up palette file
     let _ = std::fs::remove_file(&palette_path);
-
     Ok(())
 }
 
-fn pipe_rawv_to_ffmpeg(
+fn pipe_frames_to_ffmpeg(
     app: &AppHandle,
     config: &ExportConfig,
-    frame_size: usize,
-    total_frames: u64,
-    args: &[String],
-) -> Result<(), String> {
-    pipe_rawv_to_ffmpeg_with_progress_range(app, config, frame_size, total_frames, args, 0.0, 1.0)
-}
-
-fn pipe_rawv_to_ffmpeg_with_progress_range(
-    app: &AppHandle,
-    config: &ExportConfig,
-    frame_size: usize,
     total_frames: u64,
     args: &[String],
     progress_start: f64,
@@ -199,29 +183,26 @@ fn pipe_rawv_to_ffmpeg_with_progress_range(
     let mut stdin = child.stdin.take()
         .ok_or("Failed to open ffmpeg stdin")?;
 
-    // Open rawv file and seek to start frame
-    let mut file = std::fs::File::open(&config.input_path)
-        .map_err(|e| format!("Failed to open rawv file: {}", e))?;
-
-    let start_offset = RAWV_HEADER_SIZE + config.start_frame as u64 * frame_size as u64;
-    file.seek(SeekFrom::Start(start_offset))
-        .map_err(|e| format!("Failed to seek: {}", e))?;
-
-    let mut frame_buf = vec![0u8; frame_size];
     let progress_range = progress_end - progress_start;
     let mut write_error: Option<String> = None;
 
+    // Read frames from the in-memory store
+    let store = COMPLETED_RECORDING.read().unwrap();
+    let rec = store.as_ref().ok_or("No recording available")?;
+
     for i in 0..total_frames {
-        if let Err(e) = file.read_exact(&mut frame_buf) {
-            write_error = Some(format!("Failed to read frame {}: {}", i, e));
+        let frame_idx = (config.start_frame as u64 + i) as usize;
+        if frame_idx >= rec.frames.len() {
+            write_error = Some(format!("Frame index {} out of range", frame_idx));
             break;
         }
-        if let Err(e) = stdin.write_all(&frame_buf) {
+
+        // Write raw BGRA frame directly to FFmpeg (no conversion needed)
+        if let Err(e) = stdin.write_all(&rec.frames[frame_idx]) {
             write_error = Some(format!("FFmpeg stdin write error at frame {}: {}", i, e));
             break;
         }
 
-        // Emit progress every 10 frames
         if i % 10 == 0 || i == total_frames - 1 {
             let ratio = (i + 1) as f64 / total_frames as f64;
             let progress = progress_start + ratio * progress_range;
@@ -236,13 +217,12 @@ fn pipe_rawv_to_ffmpeg_with_progress_range(
         }
     }
 
-    // Close stdin to signal end of input
     drop(stdin);
+    drop(store); // Release read lock
 
     let output = child.wait_with_output()
         .map_err(|e| format!("FFmpeg wait failed: {}", e))?;
 
-    // Report write errors
     if let Some(e) = write_error {
         return Err(e);
     }

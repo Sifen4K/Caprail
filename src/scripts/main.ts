@@ -68,16 +68,17 @@ async function openEditorWindow(data: { id: number; width: number; height: numbe
 let pinCounter = 0;
 let preCreatedClipEditor: WebviewWindow | null = null;
 
-async function openPinWindow(data: { path: string; width: number; height: number }) {
+async function openPinWindow(data: { id: number; width: number; height: number }) {
   // Pinned to screen — allow shortcuts again
   isCapturing = false;
 
   const id = `pin-${++pinCounter}`;
-  const encodedPath = encodeURIComponent(data.path);
+
+  // Pass pin ID and dimensions to pin window
   new WebviewWindow(id, {
-    url: `src/pin.html?path=${encodedPath}`,
-    width: Math.min(data.width, 800),
-    height: Math.min(data.height, 600),
+    url: `src/pin.html?pinId=${data.id}&width=${data.width}&height=${data.height}`,
+    width: Math.min(Math.round(data.width / window.devicePixelRatio), 800),
+    height: Math.min(Math.round(data.height / window.devicePixelRatio), 600),
     center: true,
     decorations: false,
     transparent: true,
@@ -121,7 +122,7 @@ async function setup() {
   );
 
   // Listen for pin requests from editor
-  await listen<{ path: string; width: number; height: number }>(
+  await listen<{ id: number; width: number; height: number }>(
     "pin-screenshot",
     (event) => {
       updateStatus("Pinning screenshot...");

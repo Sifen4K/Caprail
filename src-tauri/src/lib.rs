@@ -124,6 +124,8 @@ pub fn run() {
             capture::read_screenshot,
             capture::cleanup_screenshot,
             capture::save_pin_image,
+            capture::read_pin_image,
+            capture::cleanup_pin_image,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,

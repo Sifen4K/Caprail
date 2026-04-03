@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::ipc::Response;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,8 +28,12 @@ pub struct CapturedScreenshot {
 }
 
 static NEXT_SCREENSHOT_ID: AtomicU32 = AtomicU32::new(1);
+static NEXT_PIN_ID: AtomicU32 = AtomicU32::new(1);
 
 pub static SCREENSHOT_STORE: once_cell::sync::Lazy<RwLock<HashMap<u32, CapturedScreenshot>>> =
+    once_cell::sync::Lazy::new(|| RwLock::new(HashMap::new()));
+
+pub static PIN_STORE: once_cell::sync::Lazy<RwLock<HashMap<u32, Vec<u8>>>> =
     once_cell::sync::Lazy::new(|| RwLock::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,17 +390,25 @@ pub fn capture_window(hwnd: usize) -> Result<CaptureResult, String> {
 }
 
 #[tauri::command]
-pub fn save_pin_image(data: Vec<u8>) -> Result<String, String> {
-    let temp_dir = screenshot_temp_dir();
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+pub fn save_pin_image(data: Vec<u8>) -> Result<u32, String> {
+    let id = NEXT_PIN_ID.fetch_add(1, Ordering::Relaxed);
+    let mut store = PIN_STORE.write().unwrap();
+    store.insert(id, data);
+    Ok(id)
+}
 
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = temp_dir.join(format!("pin-{}.png", timestamp));
+#[tauri::command]
+pub fn read_pin_image(id: u32) -> Result<Response, String> {
+    let store = PIN_STORE.read().unwrap();
+    let data = store
+        .get(&id)
+        .ok_or_else(|| format!("No pin image with id {}", id))?;
+    Ok(Response::new(data.clone()))
+}
 
-    std::fs::write(&path, &data).map_err(|e| format!("Failed to save pin image: {}", e))?;
-
-    Ok(path.to_string_lossy().to_string())
+#[tauri::command]
+pub fn cleanup_pin_image(id: u32) -> Result<(), String> {
+    let mut store = PIN_STORE.write().unwrap();
+    store.remove(&id);
+    Ok(())
 }

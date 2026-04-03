@@ -55,11 +55,16 @@ export async function pinToScreen(state: EditorState, redrawAll: () => void) {
   if (blob) {
     const arrayBuffer = await blob.arrayBuffer();
     const uint8Array = new Uint8Array(arrayBuffer);
-    const tempPath = await invoke<string>("save_pin_image", {
+    // Store image in Rust backend and get an ID
+    const pinId = await invoke<number>("save_pin_image", {
       data: Array.from(uint8Array),
     });
     const { emit } = await import("@tauri-apps/api/event");
-    await emit("pin-screenshot", { path: tempPath, width: state.canvas.width, height: state.canvas.height });
+    await emit("pin-screenshot", {
+      id: pinId,
+      width: state.canvas.width,
+      height: state.canvas.height
+    });
   }
 }
 

@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import type { ToolType, StampType, EditorState } from "./editor-types";
 import { redrawAll, setupCanvasHandlers, bakeBuffer } from "./editor-canvas";
 import { undo, redo } from "./editor-history";
@@ -26,6 +28,7 @@ const state: EditorState = {
   bufferCanvas: null,
   bufferCtx: null,
   baseCanvas: null,
+  dpiScale: 1,
 };
 
 const redraw = () => redrawAll(state);
@@ -41,19 +44,34 @@ let screenshotId: number | null = null;
 async function loadScreenshot() {
   const params = new URLSearchParams(window.location.search);
   const idStr = params.get("id");
-  const width = parseInt(params.get("width") || "0");
-  const height = parseInt(params.get("height") || "0");
+  const width = parseInt(params.get("width") || "0");  // Physical pixels
+  const height = parseInt(params.get("height") || "0"); // Physical pixels
   if (!idStr || !width || !height) return;
 
   screenshotId = parseInt(idStr);
+
+  // Get DPI scale factor to convert physical pixels to logical size
+  const dpiScale = window.devicePixelRatio;
+  state.dpiScale = dpiScale;
+  const logicalWidth = Math.round(width / dpiScale);
+  const logicalHeight = Math.round(height / dpiScale);
+
+  console.log("Screenshot physical size:", width, "x", height);
+  console.log("DPI scale:", dpiScale);
+  console.log("Logical size:", logicalWidth, "x", logicalHeight);
 
   try {
     const buffer = await invoke<ArrayBuffer>("read_screenshot", { id: screenshotId });
     const bytes = new Uint8ClampedArray(buffer);
     const imageData = new ImageData(bytes, width, height);
 
+    // Set canvas pixel size (physical pixels for crisp rendering)
     canvas.width = width;
     canvas.height = height;
+    // Set canvas CSS size (logical pixels for correct display scale)
+    canvas.style.width = `${logicalWidth}px`;
+    canvas.style.height = `${logicalHeight}px`;
+
     ctx.putImageData(imageData, 0, 0);
     state.baseImageData = imageData;
 
@@ -72,6 +90,17 @@ async function loadScreenshot() {
     state.baseCanvas = baseCanvas;
 
     bakeBuffer(state);
+
+    // Resize window to fit the screenshot (logical size + padding)
+    const win = getCurrentWindow();
+    const toolbarHeight = 44; // toolbar + border
+    const padding = 20;
+    const windowWidth = Math.min(logicalWidth + padding, 1600);
+    const windowHeight = Math.min(logicalHeight + toolbarHeight + padding, 1000);
+    await win.setSize(new LogicalSize(windowWidth, windowHeight));
+    await win.center();
+
+    console.log("Window resized to:", windowWidth, "x", windowHeight);
   } catch (err) {
     console.error("Failed to load screenshot:", err);
   }

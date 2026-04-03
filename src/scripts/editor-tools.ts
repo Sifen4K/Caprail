@@ -1,11 +1,13 @@
 import type { Annotation, EditorState } from "./editor-types";
 
 export function drawAnnotation(state: EditorState, ann: Annotation) {
-  const { ctx } = state;
+  const { ctx, dpiScale } = state;
+
   ctx.save();
   ctx.strokeStyle = ann.color;
   ctx.fillStyle = ann.color;
-  ctx.lineWidth = ann.lineWidth;
+  // Scale lineWidth to physical pixels for consistent visual width
+  ctx.lineWidth = ann.lineWidth * dpiScale;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
@@ -32,7 +34,7 @@ export function drawAnnotation(state: EditorState, ann: Annotation) {
 
     case "arrow":
       if (ann.x1 != null && ann.y1 != null && ann.x2 != null && ann.y2 != null) {
-        drawArrow(ctx, ann.x1, ann.y1, ann.x2, ann.y2, ann.lineWidth);
+        drawArrow(ctx, ann.x1, ann.y1, ann.x2, ann.y2, ann.lineWidth * dpiScale);
       }
       break;
 
@@ -68,7 +70,7 @@ export function drawAnnotation(state: EditorState, ann: Annotation) {
 
     case "stamp":
       if (ann.x != null && ann.y != null) {
-        drawStamp(ctx, ann);
+        drawStamp(ctx, ann, dpiScale);
       }
       break;
   }
@@ -79,9 +81,9 @@ export function drawAnnotation(state: EditorState, ann: Annotation) {
 function drawArrow(
   ctx: CanvasRenderingContext2D,
   x1: number, y1: number, x2: number, y2: number,
-  lineWidth: number
+  lineWidth: number // Already in physical pixels
 ) {
-  const headLen = Math.max(10, lineWidth * 4);
+  const headLen = Math.max(10 * (lineWidth / 2), lineWidth * 4);
   const angle = Math.atan2(y2 - y1, x2 - x1);
 
   ctx.beginPath();
@@ -146,36 +148,37 @@ function applyBlur(state: EditorState, x: number, y: number, w: number, h: numbe
   ctx.restore();
 }
 
-function drawStamp(ctx: CanvasRenderingContext2D, ann: Annotation) {
+function drawStamp(ctx: CanvasRenderingContext2D, ann: Annotation, dpiScale: number) {
   const x = ann.x!;
   const y = ann.y!;
-  ctx.font = "bold 20px sans-serif";
+  const radius = 14 * dpiScale;
+  ctx.font = `bold ${20 * dpiScale}px sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
   switch (ann.stampType) {
     case "counter": {
       ctx.beginPath();
-      ctx.arc(x, y, 14, 0, Math.PI * 2);
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fillStyle = ann.color;
       ctx.fill();
       ctx.fillStyle = "#fff";
-      ctx.fillText(String(ann.stampIndex || 1), x, y + 1);
+      ctx.fillText(String(ann.stampIndex || 1), x, y + dpiScale);
       break;
     }
     case "check":
       ctx.fillStyle = ann.color;
-      ctx.font = "bold 28px sans-serif";
+      ctx.font = `bold ${28 * dpiScale}px sans-serif`;
       ctx.fillText("✓", x, y);
       break;
     case "cross":
       ctx.fillStyle = ann.color;
-      ctx.font = "bold 28px sans-serif";
+      ctx.font = `bold ${28 * dpiScale}px sans-serif`;
       ctx.fillText("✗", x, y);
       break;
     case "star":
       ctx.fillStyle = ann.color;
-      ctx.font = "bold 28px sans-serif";
+      ctx.font = `bold ${28 * dpiScale}px sans-serif`;
       ctx.fillText("★", x, y);
       break;
   }

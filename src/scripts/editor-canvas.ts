@@ -4,9 +4,13 @@ import { addAnnotation } from "./editor-history";
 
 export function getCanvasPos(canvas: HTMLCanvasElement, e: MouseEvent) {
   const rect = canvas.getBoundingClientRect();
+  // Convert logical (CSS) coordinates to physical pixel coordinates
+  // canvas.width/height are physical pixels, rect.width/height are CSS pixels
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
   return {
-    x: e.clientX - rect.left,
-    y: e.clientY - rect.top,
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
   };
 }
 
@@ -163,9 +167,14 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
   const pos = getCanvasPos(state.canvas, e);
   const canvasRect = state.canvas.getBoundingClientRect();
 
+  // Convert physical pixel position to logical (CSS) position for overlay
+  const dpiScale = state.dpiScale;
+  const logicalX = pos.x / dpiScale;
+  const logicalY = pos.y / dpiScale;
+
   overlay.style.display = "block";
-  overlay.style.left = `${canvasRect.left + pos.x}px`;
-  overlay.style.top = `${canvasRect.top + pos.y}px`;
+  overlay.style.left = `${canvasRect.left + logicalX}px`;
+  overlay.style.top = `${canvasRect.top + logicalY}px`;
   input.style.color = state.currentColor;
   input.style.fontSize = `${state.currentFontSize}px`;
   input.value = "";
@@ -179,9 +188,9 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
         color: state.currentColor,
         lineWidth: state.currentLineWidth,
         x: pos.x,
-        y: pos.y + state.currentFontSize,
+        y: pos.y + state.currentFontSize * dpiScale, // Use physical pixels
         text,
-        fontSize: state.currentFontSize,
+        fontSize: state.currentFontSize * dpiScale, // Scale font size to physical pixels
       }, redraw);
     }
     overlay.style.display = "none";

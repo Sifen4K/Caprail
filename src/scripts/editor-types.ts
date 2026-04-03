@@ -37,4 +37,5 @@ export interface EditorState {
   bufferCanvas: HTMLCanvasElement | null;
   bufferCtx: CanvasRenderingContext2D | null;
   baseCanvas: HTMLCanvasElement | null;
+  dpiScale: number; // Physical pixels per CSS pixel
 }

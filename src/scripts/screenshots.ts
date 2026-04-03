@@ -11,6 +11,15 @@ interface WindowInfo {
   hwnd: number;
 }
 
+interface MonitorInfo {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale_factor: number;
+  is_primary: boolean;
+}
+
 let captureWindow: WebviewWindow | null = null;
 
 export async function createScreenCaptureWindow() {
@@ -20,27 +29,46 @@ export async function createScreenCaptureWindow() {
     captureWindow = null;
   }
 
-  // Calculate bounding rect of all monitors
-  const monitors = await availableMonitors();
+  // Get physical monitor info from Rust backend
+  const physicalMonitors = await invoke<MonitorInfo[]>("get_monitors");
+  console.log("Physical monitors:", physicalMonitors);
+
+  // Calculate bounding rect of all monitors in physical coordinates
   let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
-  if (monitors.length > 0) {
+  if (physicalMonitors.length > 0) {
     minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
+    for (const m of physicalMonitors) {
+      minX = Math.min(minX, m.x);
+      minY = Math.min(minY, m.y);
+      maxX = Math.max(maxX, m.x + m.width);
+      maxY = Math.max(maxY, m.y + m.height);
+    }
+  }
+  console.log("Physical bounding rect:", minX, minY, maxX, maxY);
+
+  // Get logical monitor info from Tauri API for window sizing
+  const monitors = await availableMonitors();
+  let logicalMinX = 0, logicalMinY = 0, logicalMaxX = 1920, logicalMaxY = 1080;
+  if (monitors.length > 0) {
+    logicalMinX = Infinity; logicalMinY = Infinity; logicalMaxX = -Infinity; logicalMaxY = -Infinity;
     for (const m of monitors) {
       const mx = m.position.x;
       const my = m.position.y;
-      minX = Math.min(minX, mx);
-      minY = Math.min(minY, my);
-      maxX = Math.max(maxX, mx + m.size.width);
-      maxY = Math.max(maxY, my + m.size.height);
+      logicalMinX = Math.min(logicalMinX, mx);
+      logicalMinY = Math.min(logicalMinY, my);
+      logicalMaxX = Math.max(logicalMaxX, mx + m.size.width);
+      logicalMaxY = Math.max(logicalMaxY, my + m.size.height);
     }
   }
+  console.log("Logical bounding rect:", logicalMinX, logicalMinY, logicalMaxX, logicalMaxY);
 
+  // Use logical coordinates for window creation (Tauri uses logical coords)
   captureWindow = new WebviewWindow("screenshot-overlay", {
     url: "src/screenshot-overlay.html",
-    width: maxX - minX,
-    height: maxY - minY,
-    x: minX,
-    y: minY,
+    width: logicalMaxX - logicalMinX,
+    height: logicalMaxY - logicalMinY,
+    x: logicalMinX,
+    y: logicalMinY,
     transparent: true,
     decorations: false,
     alwaysOnTop: true,

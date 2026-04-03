@@ -42,10 +42,15 @@ const MAX_INFLIGHT = 4;
 
 // ── Initialization ────────────────────────────────────────────────────
 
-invoke<{ width: number; height: number; fps: number; frameCount: number }>(
-  "get_recording_info"
-)
-  .then((info) => {
+async function loadRecording() {
+  try {
+    const info = await invoke<{
+      width: number;
+      height: number;
+      fps: number;
+      frameCount: number;
+    }>("get_recording_info");
+
     videoWidth = info.width;
     videoHeight = info.height;
     fps = info.fps;
@@ -59,11 +64,18 @@ invoke<{ width: number; height: number; fps: number; frameCount: number }>(
     updateTimeDisplay();
     updateTrimUI();
 
-    // Render first frame
     fetchAndRender(0);
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error("Failed to load recording info:", err);
+  }
+}
+
+// Try loading immediately (works if window created after recording stopped).
+// If recording data isn't ready yet (pre-created window), wait for signal.
+invoke("get_recording_info")
+  .then(() => loadRecording())
+  .catch(() => {
+    listen("recording-data-ready", () => loadRecording());
   });
 
 // Free in-memory frames when editor window closes

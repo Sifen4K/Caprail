@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { register, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -67,6 +67,7 @@ async function openEditorWindow(data: { path: string; width: number; height: num
 }
 
 let pinCounter = 0;
+let preCreatedClipEditor: WebviewWindow | null = null;
 
 async function openPinWindow(data: { path: string; width: number; height: number }) {
   // Pinned to screen — allow shortcuts again
@@ -88,17 +89,26 @@ async function openPinWindow(data: { path: string; width: number; height: number
   });
 }
 
-async function openClipEditor() {
+async function showClipEditor() {
   isCapturing = false;
 
-  new WebviewWindow("clip-editor", {
-    url: `src/clip-editor.html`,
-    width: 900,
-    height: 650,
-    center: true,
-    title: "Recording Editor",
-    resizable: true,
-  });
+  if (preCreatedClipEditor) {
+    // Window already pre-created during recording — just show it
+    await preCreatedClipEditor.show();
+    await preCreatedClipEditor.center();
+    await emit("recording-data-ready", {});
+  } else {
+    // Fallback: create window on the spot
+    preCreatedClipEditor = new WebviewWindow("clip-editor", {
+      url: `src/clip-editor.html`,
+      width: 900,
+      height: 650,
+      center: true,
+      title: "Recording Editor",
+      resizable: true,
+    });
+    // Data is already in memory, editor will load on init
+  }
 }
 
 async function setup() {
@@ -143,6 +153,20 @@ async function setup() {
           config: { x, y, width, height, fps: 30 },
         });
 
+        // Pre-create clip editor window (hidden) to warm up WebView2
+        preCreatedClipEditor = new WebviewWindow("clip-editor", {
+          url: "src/clip-editor.html",
+          width: 900,
+          height: 650,
+          center: true,
+          title: "Recording Editor",
+          resizable: true,
+          visible: false,
+        });
+        preCreatedClipEditor.once("tauri://destroyed", () => {
+          preCreatedClipEditor = null;
+        });
+
         // Open recording control bar
         new WebviewWindow("record-control", {
           url: "src/record-control.html",
@@ -167,7 +191,7 @@ async function setup() {
   // Listen for recording stopped
   await listen("recording-stopped", () => {
     updateStatus("Recording stopped, opening editor...");
-    openClipEditor();
+    showClipEditor();
   });
 
   await listen("tray-screenshot", () => {

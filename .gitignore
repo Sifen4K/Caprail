@@ -8,6 +8,9 @@ release/
 # Tauri build output
 src-tauri/target/
 
+# Tauri auto-generated schemas
+src-tauri/gen/
+
 # IDE
 .vscode/
 .idea/

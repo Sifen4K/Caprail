@@ -49,7 +49,7 @@ export async function saveToFile(state: EditorState, redrawAll: () => void) {
 }
 
 export async function pinToScreen(state: EditorState, redrawAll: () => void) {
-  if (!state.screenshotPath) return;
+  if (!state.baseImageData) return;
   redrawAll();
   const blob = await canvasToBlob(state.canvas, "image/png");
   if (blob) {

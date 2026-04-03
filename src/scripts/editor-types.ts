@@ -32,7 +32,6 @@ export interface EditorState {
   isDrawing: boolean;
   currentAnnotation: Annotation | null;
   baseImageData: ImageData | null;
-  screenshotPath: string | null;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   bufferCanvas: HTMLCanvasElement | null;

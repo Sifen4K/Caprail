@@ -1,4 +1,4 @@
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import type { ToolType, StampType, EditorState } from "./editor-types";
 import { redrawAll, setupCanvasHandlers, bakeBuffer } from "./editor-canvas";
 import { undo, redo } from "./editor-history";
@@ -21,7 +21,6 @@ const state: EditorState = {
   isDrawing: false,
   currentAnnotation: null,
   baseImageData: null,
-  screenshotPath: null,
   canvas,
   ctx,
   bufferCanvas: null,
@@ -37,38 +36,45 @@ const bakeAndRedraw = () => {
 
 // --- Image Loading ---
 
+let screenshotId: number | null = null;
+
 async function loadScreenshot() {
   const params = new URLSearchParams(window.location.search);
-  const filePath = params.get("path");
-  if (!filePath) return;
+  const idStr = params.get("id");
+  const width = parseInt(params.get("width") || "0");
+  const height = parseInt(params.get("height") || "0");
+  if (!idStr || !width || !height) return;
 
-  state.screenshotPath = filePath;
-  const assetUrl = convertFileSrc(filePath);
+  screenshotId = parseInt(idStr);
 
-  const img = new Image();
-  img.onload = () => {
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    ctx.drawImage(img, 0, 0);
-    state.baseImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  try {
+    const buffer = await invoke<ArrayBuffer>("read_screenshot", { id: screenshotId });
+    const bytes = new Uint8ClampedArray(buffer);
+    const imageData = new ImageData(bytes, width, height);
+
+    canvas.width = width;
+    canvas.height = height;
+    ctx.putImageData(imageData, 0, 0);
+    state.baseImageData = imageData;
 
     // Create buffer canvas for layered rendering
     const bufferCanvas = document.createElement("canvas");
-    bufferCanvas.width = canvas.width;
-    bufferCanvas.height = canvas.height;
+    bufferCanvas.width = width;
+    bufferCanvas.height = height;
     state.bufferCanvas = bufferCanvas;
     state.bufferCtx = bufferCanvas.getContext("2d")!;
 
     // Create base canvas for mosaic source
     const baseCanvas = document.createElement("canvas");
-    baseCanvas.width = canvas.width;
-    baseCanvas.height = canvas.height;
-    baseCanvas.getContext("2d")!.putImageData(state.baseImageData, 0, 0);
+    baseCanvas.width = width;
+    baseCanvas.height = height;
+    baseCanvas.getContext("2d")!.putImageData(imageData, 0, 0);
     state.baseCanvas = baseCanvas;
 
     bakeBuffer(state);
-  };
-  img.src = assetUrl;
+  } catch (err) {
+    console.error("Failed to load screenshot:", err);
+  }
 }
 
 loadScreenshot();
@@ -157,10 +163,10 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// --- Cleanup temp file on close ---
+// --- Cleanup on close ---
 
 window.addEventListener("beforeunload", () => {
-  if (state.screenshotPath) {
-    invoke("cleanup_temp_file", { path: state.screenshotPath }).catch(() => {});
+  if (screenshotId !== null) {
+    invoke("cleanup_screenshot", { id: screenshotId }).catch(() => {});
   }
 });

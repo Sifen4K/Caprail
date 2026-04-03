@@ -181,7 +181,7 @@ canvas.addEventListener("mouseup", async () => {
   }
 
   try {
-    const result = await invoke<{ path: string; width: number; height: number }>(
+    const result = await invoke<{ id: number; width: number; height: number }>(
       "capture_region",
       {
         x: captureRect.x,
@@ -201,7 +201,7 @@ canvas.addEventListener("mouseup", async () => {
 
 async function captureFullScreen() {
   try {
-    const result = await invoke<{ path: string; width: number; height: number }>(
+    const result = await invoke<{ id: number; width: number; height: number }>(
       "capture_screen",
       { monitorIndex: 0 }
     );

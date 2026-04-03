@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::ipc::Response;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -13,10 +17,21 @@ pub struct WindowInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureResult {
-    pub path: String,
+    pub id: u32,
     pub width: u32,
     pub height: u32,
 }
+
+pub struct CapturedScreenshot {
+    pub data: Vec<u8>, // BGRA with alpha fixed to 0xFF
+    pub width: u32,
+    pub height: u32,
+}
+
+static NEXT_SCREENSHOT_ID: AtomicU32 = AtomicU32::new(1);
+
+pub static SCREENSHOT_STORE: once_cell::sync::Lazy<RwLock<HashMap<u32, CapturedScreenshot>>> =
+    once_cell::sync::Lazy::new(|| RwLock::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonitorInfo {
@@ -33,51 +48,44 @@ pub fn screenshot_temp_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("screenshot-tool-captures")
 }
 
-/// Save BGRA pixel data as an uncompressed BMP file in the temp directory.
-/// BMP with BI_RGB 32-bit natively stores BGRA, so no pixel format conversion is needed.
-fn save_capture_as_bmp(data: &[u8], width: u32, height: u32) -> Result<String, String> {
-    use std::io::Write;
+/// Fix alpha channel in BGRA data. GDI BitBlt leaves alpha as 0x00.
+fn fix_alpha(data: &mut [u8]) {
+    for pixel in data.chunks_exact_mut(4) {
+        pixel[3] = 0xFF;
+    }
+}
 
-    let temp_dir = screenshot_temp_dir();
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+/// Fix alpha, store in memory, return an ID for retrieval.
+fn store_screenshot(mut data: Vec<u8>, width: u32, height: u32) -> u32 {
+    fix_alpha(&mut data);
+    let id = NEXT_SCREENSHOT_ID.fetch_add(1, Ordering::Relaxed);
+    let mut store = SCREENSHOT_STORE.write().unwrap();
+    store.insert(id, CapturedScreenshot { data, width, height });
+    id
+}
 
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = temp_dir.join(format!("capture-{}.bmp", timestamp));
+/// Read screenshot as RGBA binary data for the frontend.
+#[tauri::command]
+pub fn read_screenshot(id: u32) -> Result<Response, String> {
+    let store = SCREENSHOT_STORE.read().unwrap();
+    let screenshot = store
+        .get(&id)
+        .ok_or_else(|| format!("No screenshot with id {}", id))?;
 
-    let data_size = data.len() as u32;
-    let file_size = 54u32 + data_size;
+    // BGRA → RGBA
+    let mut rgba = screenshot.data.clone();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
 
-    let mut header = Vec::with_capacity(54);
-    // BITMAPFILEHEADER (14 bytes)
-    header.extend_from_slice(&[0x42, 0x4D]); // 'BM'
-    header.extend_from_slice(&file_size.to_le_bytes());
-    header.extend_from_slice(&0u16.to_le_bytes()); // reserved1
-    header.extend_from_slice(&0u16.to_le_bytes()); // reserved2
-    header.extend_from_slice(&54u32.to_le_bytes()); // offset to pixel data
-    // BITMAPINFOHEADER (40 bytes)
-    header.extend_from_slice(&40u32.to_le_bytes()); // header size
-    header.extend_from_slice(&(width as i32).to_le_bytes());
-    header.extend_from_slice(&(-(height as i32)).to_le_bytes()); // negative = top-down
-    header.extend_from_slice(&1u16.to_le_bytes()); // planes
-    header.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
-    header.extend_from_slice(&0u32.to_le_bytes()); // compression = BI_RGB
-    header.extend_from_slice(&data_size.to_le_bytes());
-    header.extend_from_slice(&0i32.to_le_bytes()); // x pixels per meter
-    header.extend_from_slice(&0i32.to_le_bytes()); // y pixels per meter
-    header.extend_from_slice(&0u32.to_le_bytes()); // colors used
-    header.extend_from_slice(&0u32.to_le_bytes()); // important colors
+    Ok(Response::new(rgba))
+}
 
-    let mut file = std::fs::File::create(&path)
-        .map_err(|e| format!("Failed to create BMP file: {}", e))?;
-    file.write_all(&header)
-        .map_err(|e| format!("Failed to write BMP header: {}", e))?;
-    file.write_all(data)
-        .map_err(|e| format!("Failed to write BMP data: {}", e))?;
-
-    Ok(path.to_string_lossy().to_string())
+/// Free screenshot memory.
+#[tauri::command]
+pub fn cleanup_screenshot(id: u32) {
+    let mut store = SCREENSHOT_STORE.write().unwrap();
+    store.remove(&id);
 }
 
 #[tauri::command]
@@ -309,10 +317,10 @@ pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
         let height = info.monitorInfo.rcMonitor.bottom - y;
 
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
+        let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {
-            path,
+            id,
             width: width as u32,
             height: height as u32,
         })
@@ -329,10 +337,10 @@ pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<Capture
     #[cfg(windows)]
     {
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
+        let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {
-            path,
+            id,
             width: width as u32,
             height: height as u32,
         })
@@ -363,10 +371,10 @@ pub fn capture_window(hwnd: usize) -> Result<CaptureResult, String> {
         let height = rect.bottom - y;
 
         let bgra_data = gdi_capture(x, y, width, height)?;
-        let path = save_capture_as_bmp(&bgra_data, width as u32, height as u32)?;
+        let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {
-            path,
+            id,
             width: width as u32,
             height: height as u32,
         })
@@ -376,17 +384,6 @@ pub fn capture_window(hwnd: usize) -> Result<CaptureResult, String> {
     {
         Err("Not supported on this platform".to_string())
     }
-}
-
-#[tauri::command]
-pub fn cleanup_temp_file(path: String) -> Result<(), String> {
-    let path = std::path::Path::new(&path);
-    // Only allow deleting files in our temp directory
-    let temp_dir = screenshot_temp_dir();
-    if path.starts_with(&temp_dir) {
-        std::fs::remove_file(path).map_err(|e| format!("Failed to delete temp file: {}", e))?;
-    }
-    Ok(())
 }
 
 #[tauri::command]

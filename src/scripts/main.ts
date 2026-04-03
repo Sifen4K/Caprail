@@ -51,13 +51,12 @@ async function registerShortcuts() {
   }
 }
 
-async function openEditorWindow(data: { path: string; width: number; height: number }) {
+async function openEditorWindow(data: { id: number; width: number; height: number }) {
   // Entered editor — allow shortcuts again
   isCapturing = false;
 
-  const encodedPath = encodeURIComponent(data.path);
   new WebviewWindow(`editor-${++editorCounter}`, {
-    url: `src/editor.html?path=${encodedPath}`,
+    url: `src/editor.html?id=${data.id}&width=${data.width}&height=${data.height}`,
     width: Math.min(data.width + 40, 1600),
     height: Math.min(data.height + 80, 1000),
     center: true,
@@ -113,7 +112,7 @@ async function showClipEditor() {
 
 async function setup() {
   // Listen for screenshot captured from overlay
-  await listen<{ path: string; width: number; height: number }>(
+  await listen<{ id: number; width: number; height: number }>(
     "screenshot-captured",
     (event) => {
       updateStatus("Screenshot captured, opening editor...");

@@ -2,10 +2,27 @@ import type { Annotation, EditorState } from "./editor-types";
 import { drawAnnotation } from "./editor-tools";
 import { addAnnotation } from "./editor-history";
 
+// Track active text input state to prevent duplicate listeners
+let activeTextInput: {
+  overlay: HTMLElement;
+  input: HTMLTextAreaElement;
+  state: EditorState;
+  pos: { x: number; y: number };
+  dpiScale: number;
+  blurHandler: () => void;
+  keyHandler: (e: KeyboardEvent) => void;
+} | null = null;
+
 export function getCanvasPos(canvas: HTMLCanvasElement, e: MouseEvent) {
   const rect = canvas.getBoundingClientRect();
+  // Protect against division by zero
+  if (rect.width === 0 || rect.height === 0) {
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  }
   // Convert logical (CSS) coordinates to physical pixel coordinates
-  // canvas.width/height are physical pixels, rect.width/height are CSS pixels
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
   return {
@@ -54,7 +71,8 @@ export function redrawAll(state: EditorState) {
 export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAnnotationChange: () => void) {
   const { canvas } = state;
 
-  canvas.addEventListener("mousedown", (e) => {
+  // Use click event for text and stamp tools (more reliable than mousedown)
+  canvas.addEventListener("click", (e) => {
     if (state.currentTool === "text") {
       showTextInput(state, e, onAnnotationChange);
       return;
@@ -64,6 +82,9 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
       placeStamp(state, e, onAnnotationChange);
       return;
     }
+  });
+
+  canvas.addEventListener("mousedown", (e) => {
 
     state.isDrawing = true;
     const pos = getCanvasPos(canvas, e);
@@ -164,23 +185,49 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
 function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
   const overlay = document.getElementById("text-input-overlay")!;
   const input = document.getElementById("text-input") as HTMLTextAreaElement;
+
+  // Position overlay directly at mouse click position (viewport coordinates)
+  const clickX = e.clientX;
+  const clickY = e.clientY;
+
+  // Calculate physical pixel position for the annotation
   const pos = getCanvasPos(state.canvas, e);
-  const canvasRect = state.canvas.getBoundingClientRect();
-
-  // Convert physical pixel position to logical (CSS) position for overlay
   const dpiScale = state.dpiScale;
-  const logicalX = pos.x / dpiScale;
-  const logicalY = pos.y / dpiScale;
 
+  // If there's already an active text input, finalize it first
+  if (activeTextInput) {
+    // Remove old listeners before finalizing
+    activeTextInput.input.removeEventListener("blur", activeTextInput.blurHandler);
+    activeTextInput.input.removeEventListener("keydown", activeTextInput.keyHandler);
+
+    // Save the current text if any, using the state from when input started
+    const text = activeTextInput.input.value.trim();
+    if (text) {
+      const savedState = activeTextInput.state;
+      addAnnotation(savedState, {
+        type: "text",
+        color: savedState.currentColor,
+        lineWidth: savedState.currentLineWidth,
+        x: activeTextInput.pos.x,
+        y: activeTextInput.pos.y + savedState.currentFontSize * activeTextInput.dpiScale,
+        text,
+        fontSize: savedState.currentFontSize * activeTextInput.dpiScale,
+      }, redraw);
+    }
+    activeTextInput.overlay.style.display = "none";
+    activeTextInput = null;
+  }
+
+  // Show input at click position
   overlay.style.display = "block";
-  overlay.style.left = `${canvasRect.left + logicalX}px`;
-  overlay.style.top = `${canvasRect.top + logicalY}px`;
+  overlay.style.left = `${clickX}px`;
+  overlay.style.top = `${clickY}px`;
   input.style.color = state.currentColor;
   input.style.fontSize = `${state.currentFontSize}px`;
   input.value = "";
   input.focus();
 
-  const handleBlur = () => {
+  const blurHandler = () => {
     const text = input.value.trim();
     if (text) {
       addAnnotation(state, {
@@ -188,17 +235,18 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
         color: state.currentColor,
         lineWidth: state.currentLineWidth,
         x: pos.x,
-        y: pos.y + state.currentFontSize * dpiScale, // Use physical pixels
+        y: pos.y + state.currentFontSize * dpiScale,
         text,
-        fontSize: state.currentFontSize * dpiScale, // Scale font size to physical pixels
+        fontSize: state.currentFontSize * dpiScale,
       }, redraw);
     }
     overlay.style.display = "none";
-    input.removeEventListener("blur", handleBlur);
-    input.removeEventListener("keydown", handleKey);
+    input.removeEventListener("blur", blurHandler);
+    input.removeEventListener("keydown", keyHandler);
+    activeTextInput = null;
   };
 
-  const handleKey = (e: KeyboardEvent) => {
+  const keyHandler = (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       input.blur();
@@ -209,8 +257,19 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
     }
   };
 
-  input.addEventListener("blur", handleBlur);
-  input.addEventListener("keydown", handleKey);
+  input.addEventListener("blur", blurHandler);
+  input.addEventListener("keydown", keyHandler);
+
+  // Track active input state
+  activeTextInput = {
+    overlay,
+    input,
+    state,
+    pos,
+    dpiScale,
+    blurHandler,
+    keyHandler,
+  };
 }
 
 function placeStamp(state: EditorState, e: MouseEvent, redraw: () => void) {

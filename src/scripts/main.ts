@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
-import { register, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
+import { register, unregister, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 
 const status = document.getElementById("status")!;
 
 let isCapturing = false;
 let editorCounter = 0;
+let registeredShortcuts: string[] = []; // Track registered shortcuts for cleanup
 
 function updateStatus(msg: string) {
   status.textContent = msg;
@@ -15,6 +17,19 @@ function updateStatus(msg: string) {
 // Convert "Ctrl+Shift+A" to "CommandOrControl+Shift+A" for Tauri
 function toTauriShortcut(shortcut: string): string {
   return shortcut.replace(/Ctrl/gi, "CommandOrControl");
+}
+
+// Cleanup shortcuts on exit
+async function cleanupShortcuts() {
+  console.log("Cleaning up shortcuts:", registeredShortcuts);
+  for (const shortcut of registeredShortcuts) {
+    try {
+      await unregister(shortcut);
+    } catch (e) {
+      console.log("Failed to unregister", shortcut, e);
+    }
+  }
+  registeredShortcuts = [];
 }
 
 async function registerShortcuts() {
@@ -26,6 +41,18 @@ async function registerShortcuts() {
 
     const screenshotKey = toTauriShortcut(config.screenshot_shortcut);
     const recordKey = toTauriShortcut(config.record_shortcut);
+
+    console.log("Registering shortcuts:", screenshotKey, recordKey);
+
+    // Unregister shortcuts first (in case previous instance didn't clean up)
+    try {
+      await unregister(screenshotKey);
+      await unregister(recordKey);
+      console.log("Unregistered existing shortcuts");
+    } catch (e) {
+      // Ignore errors - shortcuts may not have been registered
+      console.log("Unregister skipped:", e);
+    }
 
     await register(screenshotKey, async (event: ShortcutEvent) => {
       if (event.state !== "Pressed") return;
@@ -45,9 +72,31 @@ async function registerShortcuts() {
       await createRecordingCaptureWindow();
     });
 
+    // Save registered shortcuts for cleanup
+    registeredShortcuts = [screenshotKey, recordKey];
+
+    console.log("Shortcuts registered successfully");
     updateStatus(`Shortcuts registered: ${screenshotKey}, ${recordKey}`);
   } catch (e) {
+    console.error("Shortcut registration error:", e);
     updateStatus(`Shortcut error: ${e}`);
+
+    // Show notification for error
+    try {
+      let granted = await isPermissionGranted();
+      if (!granted) {
+        const permission = await requestPermission();
+        granted = permission === "granted";
+      }
+      if (granted) {
+        sendNotification({
+          title: "Caprail Shortcut Error",
+          body: `Failed to register shortcuts: ${e}`,
+        });
+      }
+    } catch (notifError) {
+      console.error("Notification error:", notifError);
+    }
   }
 }
 
@@ -217,8 +266,114 @@ async function setup() {
     import("./settings").then(({ openSettings }) => openSettings());
   });
 
+  // Listen for quit event and cleanup before exit
+  await listen("tray-quit", async () => {
+    updateStatus("Exiting...");
+    await cleanupShortcuts();
+  });
+
+  // Listen for shortcut changes from settings
+  await listen<{
+    oldScreenshot: string;
+    oldRecord: string;
+    newScreenshot: string;
+    newRecord: string;
+  }>("shortcuts-changed", async (event) => {
+    const { oldScreenshot, oldRecord, newScreenshot, newRecord } = event.payload;
+    console.log("Shortcuts changed, re-registering...");
+
+    // Validate new shortcuts
+    if (!newScreenshot || !newRecord) {
+      console.error("Empty shortcut received");
+      return;
+    }
+
+    const newScreenshotKey = toTauriShortcut(newScreenshot);
+    const newRecordKey = toTauriShortcut(newRecord);
+
+    // Try to register new shortcuts first (before unregistering old ones)
+    // This way we can rollback if registration fails
+    let screenshotRegistered = false;
+    let recordRegistered = false;
+
+    try {
+      await register(newScreenshotKey, async (e: ShortcutEvent) => {
+        if (e.state !== "Pressed") return;
+        if (isCapturing) return;
+        isCapturing = true;
+        updateStatus("Screenshot shortcut triggered");
+        const { createScreenCaptureWindow } = await import("./screenshots");
+        await createScreenCaptureWindow();
+      });
+      screenshotRegistered = true;
+
+      await register(newRecordKey, async (e: ShortcutEvent) => {
+        if (e.state !== "Pressed") return;
+        if (isCapturing) return;
+        isCapturing = true;
+        updateStatus("Record shortcut triggered");
+        const { createRecordingCaptureWindow } = await import("./recording");
+        await createRecordingCaptureWindow();
+      });
+      recordRegistered = true;
+
+      // New shortcuts registered successfully, now unregister old ones
+      const oldScreenshotKey = toTauriShortcut(oldScreenshot);
+      const oldRecordKey = toTauriShortcut(oldRecord);
+      try {
+        await unregister(oldScreenshotKey);
+        await unregister(oldRecordKey);
+      } catch (e) {
+        console.log("Failed to unregister old shortcuts:", e);
+      }
+
+      registeredShortcuts = [newScreenshotKey, newRecordKey];
+      console.log("New shortcuts registered:", newScreenshotKey, newRecordKey);
+      updateStatus(`Shortcuts updated: ${newScreenshotKey}, ${newRecordKey}`);
+    } catch (e) {
+      console.error("Failed to register new shortcuts:", e);
+      updateStatus(`Shortcut update error: ${e}`);
+
+      // Rollback: unregister any newly registered shortcuts
+      if (screenshotRegistered) {
+        try { await unregister(newScreenshotKey); } catch {}
+      }
+      if (recordRegistered) {
+        try { await unregister(newRecordKey); } catch {}
+      }
+
+      // Show error notification
+      try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          const permission = await requestPermission();
+          granted = permission === "granted";
+        }
+        if (granted) {
+          sendNotification({
+            title: "Shortcut Update Failed",
+            body: `Failed to register new shortcuts: ${e}. Old shortcuts still active.`,
+          });
+        }
+      } catch (notifError) {
+        console.error("Notification error:", notifError);
+      }
+    }
+  });
+
   await registerShortcuts();
   updateStatus("Ready");
 }
+
+// Cleanup on page unload (backup cleanup - use synchronous unregister via plugin API)
+// Note: async cleanup in beforeunload is unreliable, but we try our best
+window.addEventListener("beforeunload", () => {
+  // Fire and forget - we can't await in beforeunload
+  // The shortcuts will be cleaned up by the OS when the process exits
+  // This is mainly for the case where the window is closed but app keeps running
+  for (const shortcut of registeredShortcuts) {
+    unregister(shortcut).catch(() => {});
+  }
+});
 
 setup();

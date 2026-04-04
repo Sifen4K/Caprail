@@ -98,6 +98,10 @@ pub fn run() {
                             }
                             "quit" => {
                                 info!("Tray: quit clicked");
+                                // Emit quit event to frontend for cleanup, then exit after a short delay
+                                let _ = app.emit("tray-quit", ());
+                                // Give frontend time to cleanup, then exit
+                                std::thread::sleep(std::time::Duration::from_millis(100));
                                 app.exit(0);
                             }
                             _ => {}

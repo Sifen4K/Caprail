@@ -272,7 +272,7 @@ fn gdi_capture(x: i32, y: i32, width: i32, height: i32) -> Result<Vec<u8>, Strin
 }
 
 #[tauri::command]
-pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
+pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Result<CaptureResult, String> {
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::{LPARAM, RECT};
@@ -319,7 +319,30 @@ pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
         let width = info.monitorInfo.rcMonitor.right - x;
         let height = info.monitorInfo.rcMonitor.bottom - y;
 
+        // Temporarily hide the overlay window to exclude it from the capture
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            if let Some(hwnd_val) = exclude_hwnd {
+                let hwnd = HWND(hwnd_val as *mut _);
+                unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
+            }
+        }
+
         let bgra_data = gdi_capture(x, y, width, height)?;
+
+        // Show the overlay window again
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            if let Some(hwnd_val) = exclude_hwnd {
+                let hwnd = HWND(hwnd_val as *mut _);
+                unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
+            }
+        }
+
         let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {
@@ -336,10 +359,33 @@ pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
 }
 
 #[tauri::command]
-pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<CaptureResult, String> {
+pub fn capture_region(x: i32, y: i32, width: i32, height: i32, exclude_hwnd: Option<isize>) -> Result<CaptureResult, String> {
     #[cfg(windows)]
     {
+        // Temporarily hide the overlay window to exclude it from the capture
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            if let Some(hwnd_val) = exclude_hwnd {
+                let hwnd = HWND(hwnd_val as *mut _);
+                unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
+            }
+        }
+
         let bgra_data = gdi_capture(x, y, width, height)?;
+
+        // Show the overlay window again
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            if let Some(hwnd_val) = exclude_hwnd {
+                let hwnd = HWND(hwnd_val as *mut _);
+                unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
+            }
+        }
+
         let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {

@@ -253,6 +253,10 @@ canvas.addEventListener("mouseup", async () => {
   }
 
   try {
+    // Get current window handle to exclude from capture
+    const win = getCurrentWindow();
+    const hwnd = (win as any).hwnd as number;
+
     const result = await invoke<{ id: number; width: number; height: number }>(
       "capture_region",
       {
@@ -260,6 +264,7 @@ canvas.addEventListener("mouseup", async () => {
         y: captureRect.y,
         width: captureRect.w,
         height: captureRect.h,
+        exclude_hwnd: hwnd,
       }
     );
     await emit("screenshot-captured", result);
@@ -273,9 +278,12 @@ canvas.addEventListener("mouseup", async () => {
 
 async function captureFullScreen() {
   try {
+    const win = getCurrentWindow();
+    const hwnd = (win as any).hwnd as number;
+
     const result = await invoke<{ id: number; width: number; height: number }>(
       "capture_screen",
-      { monitorIndex: 0 }
+      { monitorIndex: 0, excludeHwnd: hwnd }
     );
     await emit("screenshot-captured", result);
   } catch (err) {

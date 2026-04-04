@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
 
 const canvas = document.getElementById("pin-image") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -149,14 +149,19 @@ document.addEventListener("mousemove", async (e) => {
   if (!isDragging) return;
 
   try {
-    // Use movementX/Y which gives delta directly, avoiding DPI issues
+    // movementX/Y are in CSS pixels, use LogicalPosition for consistency
     const dx = e.movementX;
     const dy = e.movementY;
 
     if (dx === 0 && dy === 0) return;
 
     const pos = await win.outerPosition();
-    await win.setPosition(new PhysicalPosition(pos.x + dx, pos.y + dy));
+    const dpiScale = window.devicePixelRatio;
+    // Convert physical position to logical, add delta, set as logical
+    await win.setPosition(new LogicalPosition(
+      Math.round(pos.x / dpiScale + dx),
+      Math.round(pos.y / dpiScale + dy)
+    ));
   } catch (err) {
     console.error("Drag error:", err);
   }

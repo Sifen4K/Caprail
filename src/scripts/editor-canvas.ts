@@ -1,6 +1,7 @@
 import type { Annotation, EditorState } from "./editor-types";
 import { drawAnnotation } from "./editor-tools";
 import { addAnnotation } from "./editor-history";
+import { getCanvasPosWithZoom } from "./editor-zoom";
 
 // Track active text input state to prevent duplicate listeners
 let activeTextInput: {
@@ -13,22 +14,8 @@ let activeTextInput: {
   keyHandler: (e: KeyboardEvent) => void;
 } | null = null;
 
-export function getCanvasPos(canvas: HTMLCanvasElement, e: MouseEvent) {
-  const rect = canvas.getBoundingClientRect();
-  // Protect against division by zero
-  if (rect.width === 0 || rect.height === 0) {
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
-  }
-  // Convert logical (CSS) coordinates to physical pixel coordinates
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY,
-  };
+export function getCanvasPosZoomAware(state: EditorState, e: MouseEvent) {
+  return getCanvasPosWithZoom(state, e);
 }
 
 export function bakeBuffer(state: EditorState) {
@@ -73,6 +60,9 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
 
   // Use click event for text and stamp tools (more reliable than mousedown)
   canvas.addEventListener("click", (e) => {
+    // Only respond to left button (button 0)
+    if (e.button !== 0) return;
+
     if (state.currentTool === "text") {
       showTextInput(state, e, onAnnotationChange);
       return;
@@ -85,9 +75,14 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
   });
 
   canvas.addEventListener("mousedown", (e) => {
+    // Only allow drawing with left mouse button (button 0)
+    if (e.button !== 0) return;
+    // Don't start drawing if panning
+    if (state.isPanning) return;
 
     state.isDrawing = true;
-    const pos = getCanvasPos(canvas, e);
+    // Always use zoom-aware position for consistency
+    const pos = getCanvasPosZoomAware(state, e);
 
     switch (state.currentTool) {
       case "rect":
@@ -128,7 +123,8 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
 
   canvas.addEventListener("mousemove", (e) => {
     if (!state.isDrawing || !state.currentAnnotation) return;
-    const pos = getCanvasPos(canvas, e);
+    // Always use zoom-aware position for consistency
+    const pos = getCanvasPosZoomAware(state, e);
 
     switch (state.currentAnnotation.type) {
       case "rect":
@@ -150,7 +146,9 @@ export function setupCanvasHandlers(state: EditorState, redraw: () => void, onAn
     redraw();
   });
 
-  canvas.addEventListener("mouseup", () => {
+  canvas.addEventListener("mouseup", (e) => {
+    // Only handle left button release
+    if (e.button !== 0) return;
     if (!state.isDrawing || !state.currentAnnotation) return;
     state.isDrawing = false;
 
@@ -187,11 +185,13 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
   const input = document.getElementById("text-input") as HTMLTextAreaElement;
 
   // Position overlay directly at mouse click position (viewport coordinates)
+  // This works correctly with zoom since viewport position doesn't change
   const clickX = e.clientX;
   const clickY = e.clientY;
 
   // Calculate physical pixel position for the annotation
-  const pos = getCanvasPos(state.canvas, e);
+  // Always use zoom-aware coordinates for consistency
+  const pos = getCanvasPosZoomAware(state, e);
   const dpiScale = state.dpiScale;
 
   // If there's already an active text input, finalize it first
@@ -273,7 +273,8 @@ function showTextInput(state: EditorState, e: MouseEvent, redraw: () => void) {
 }
 
 function placeStamp(state: EditorState, e: MouseEvent, redraw: () => void) {
-  const pos = getCanvasPos(state.canvas, e);
+  // Always use zoom-aware coordinates for consistency
+  const pos = getCanvasPosZoomAware(state, e);
   const ann: Annotation = {
     type: "stamp",
     color: state.currentColor,

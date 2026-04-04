@@ -17,12 +17,14 @@ body {
 
 #toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
   background: #2a2a2a;
   border-bottom: 1px solid #444;
   flex-shrink: 0;
+  min-height: 44px;
 }
 
 .tool-group {
@@ -34,6 +36,12 @@ body {
 .tool-group + .tool-group {
   border-left: 1px solid #444;
   padding-left: 12px;
+  margin-left: 0;
+}
+
+/* When toolbar wraps, add spacing between rows */
+.tool-group {
+  margin-bottom: 2px;
 }
 
 .tool-btn, .action-btn {
@@ -80,15 +88,17 @@ body {
 
 #canvas-wrapper {
   flex: 1;
-  overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
+  position: relative;
   background: #111;
 }
 
 #editor-canvas {
   cursor: crosshair;
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
 }
 
 #text-input-overlay {
@@ -139,9 +149,10 @@ body {
 #ocr-panel {
   position: absolute;
   right: 0;
-  top: 44px;
+  top: 44px; /* Default, overridden dynamically */
   bottom: 0;
   width: 300px;
+  max-width: 40vw;
   background: #2a2a2a;
   border-left: 1px solid #444;
   display: flex;

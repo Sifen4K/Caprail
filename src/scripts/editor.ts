@@ -5,6 +5,7 @@ import type { ToolType, StampType, EditorState } from "./editor-types";
 import { redrawAll, setupCanvasHandlers, bakeBuffer } from "./editor-canvas";
 import { undo, redo } from "./editor-history";
 import { copyToClipboard, saveToFile, pinToScreen, performOcr } from "./editor-output";
+import { handleWheel, startPan, endPan, applyZoomTransform } from "./editor-zoom";
 
 // --- State ---
 
@@ -29,6 +30,11 @@ const state: EditorState = {
   bufferCtx: null,
   baseCanvas: null,
   dpiScale: 1,
+  // Zoom state
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+  isPanning: false,
 };
 
 const redraw = () => redrawAll(state);
@@ -190,6 +196,63 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     saveToFile(state, redraw);
   }
+});
+
+// --- Zoom and Pan handlers ---
+
+const canvasWrapper = document.getElementById("canvas-wrapper")!;
+
+// Wheel zoom
+canvasWrapper.addEventListener("wheel", (e) => {
+  handleWheel(state, e);
+}, { passive: false });
+
+// Pan with right/middle mouse button
+let panStartX = 0;
+let panStartY = 0;
+let panStartPanX = 0;
+let panStartPanY = 0;
+
+canvasWrapper.addEventListener("pointerdown", (e) => {
+  // Only start pan with right button (1) or middle button (2)
+  if (e.button === 1 || e.button === 2) {
+    e.preventDefault();
+    startPan(state, e);
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panStartPanX = state.panX;
+    panStartPanY = state.panY;
+    canvasWrapper.setPointerCapture(e.pointerId);
+  }
+});
+
+canvasWrapper.addEventListener("pointermove", (e) => {
+  if (state.isPanning) {
+    const deltaX = e.clientX - panStartX;
+    const deltaY = e.clientY - panStartY;
+    state.panX = panStartPanX + deltaX;
+    state.panY = panStartPanY + deltaY;
+    // No constraint - let user pan freely
+    applyZoomTransform(state);
+  }
+});
+
+canvasWrapper.addEventListener("pointerup", (e) => {
+  if (state.isPanning) {
+    endPan(state);
+    canvasWrapper.releasePointerCapture(e.pointerId);
+  }
+});
+
+canvasWrapper.addEventListener("pointerleave", () => {
+  if (state.isPanning) {
+    endPan(state);
+  }
+});
+
+// Prevent context menu on right click (used for pan)
+canvasWrapper.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
 });
 
 // --- Cleanup on close ---

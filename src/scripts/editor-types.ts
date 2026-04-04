@@ -38,4 +38,9 @@ export interface EditorState {
   bufferCtx: CanvasRenderingContext2D | null;
   baseCanvas: HTMLCanvasElement | null;
   dpiScale: number; // Physical pixels per CSS pixel
+  // Zoom state
+  zoom: number; // Scale factor (1 = 100%)
+  panX: number; // Pan offset in CSS pixels
+  panY: number;
+  isPanning: boolean;
 }

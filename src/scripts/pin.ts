@@ -7,8 +7,6 @@ const ctx = canvas.getContext("2d")!;
 const win = getCurrentWindow();
 
 let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
 let baseWidth = 400;
 let baseHeight = 300;
 let scale = 1;
@@ -123,14 +121,12 @@ let clickCount = 0;
 let clickTimer: number | null = null;
 
 // Double-click to close, single-click to start drag
-document.addEventListener("mousedown", (e) => {
+document.addEventListener("mousedown", () => {
   clickCount++;
 
   if (clickCount === 1) {
     // First click - start drag
     isDragging = true;
-    dragStartX = e.screenX;
-    dragStartY = e.screenY;
 
     // Set timer to reset click count
     clickTimer = window.setTimeout(() => {
@@ -153,13 +149,12 @@ document.addEventListener("mousemove", async (e) => {
   if (!isDragging) return;
 
   try {
-    const dx = e.screenX - dragStartX;
-    const dy = e.screenY - dragStartY;
-    dragStartX = e.screenX;
-    dragStartY = e.screenY;
+    // Use movementX/Y which gives delta directly, avoiding DPI issues
+    const dx = e.movementX;
+    const dy = e.movementY;
 
-    // outerPosition returns physical coordinates, e.screenX/Y are also physical
-    // So use PhysicalPosition to avoid DPI conversion issues
+    if (dx === 0 && dy === 0) return;
+
     const pos = await win.outerPosition();
     await win.setPosition(new PhysicalPosition(pos.x + dx, pos.y + dy));
   } catch (err) {

@@ -1,4 +1,4 @@
-# ScreenshotTool
+# Caprail
 
 Windows 平台的截图与录屏工具，基于 Tauri 2 + TypeScript + Rust 构建。
 
@@ -178,9 +178,9 @@ Screenshot/
 
 | 文件 | 路径 |
 |------|------|
-| 应用配置 | `%APPDATA%/ScreenshotTool/config.json` |
-| 运行日志 | `%LOCALAPPDATA%/ScreenshotTool/logs/` |
-| 临时截图 | `%TEMP%/screenshot-tool-captures/` |
+| 应用配置 | `%APPDATA%/Caprail/config.json` |
+| 运行日志 | `%LOCALAPPDATA%/Caprail/logs/` |
+| 临时截图 | `%TEMP%/caprail-captures/` |
 
 ## License
 

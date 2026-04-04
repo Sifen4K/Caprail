@@ -1,12 +1,12 @@
 [package]
-name = "screenshot-tool"
+name = "caprail"
 version = "0.1.0"
 description = "A screenshot and screen recording tool for Windows"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "screenshot_tool_lib"
+name = "caprail_lib"
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [build-dependencies]

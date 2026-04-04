@@ -60,7 +60,7 @@ async function openEditorWindow(data: { id: number; width: number; height: numbe
     width: Math.min(data.width + 40, 1600),
     height: Math.min(data.height + 80, 1000),
     center: true,
-    title: "Screenshot Editor",
+    title: "Caprail Editor",
     resizable: true,
   });
 }

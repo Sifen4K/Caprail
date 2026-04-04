@@ -27,11 +27,11 @@ pub fn run() {
     // Initialize logging
     let log_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ScreenshotTool")
+        .join("Caprail")
         .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
 
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "screenshot-tool.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "caprail.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
@@ -40,7 +40,7 @@ pub fn run() {
         .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
         .init();
 
-    info!("Starting ScreenshotTool v{}", env!("CARGO_PKG_VERSION"));
+    info!("Starting Caprail v{}", env!("CARGO_PKG_VERSION"));
 
     // Clean up stale temp files from previous sessions
     let temp_dir = capture::screenshot_temp_dir();

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ScreenshotTool",
+  "productName": "Caprail",
   "version": "0.1.0",
-  "identifier": "com.screenshot.tool",
+  "identifier": "com.caprail.app",
   "build": {
     "beforeBuildCommand": "npm run build",
     "beforeDevCommand": "npm run dev",
@@ -14,7 +14,7 @@
       {
         "label": "main",
         "url": "src/index.html",
-        "title": "ScreenshotTool",
+        "title": "Caprail",
         "width": 400,
         "height": 300,
         "resizable": false,

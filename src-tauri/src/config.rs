@@ -16,7 +16,7 @@ impl Default for AppConfig {
             record_shortcut: "Ctrl+Shift+R".to_string(),
             save_path: dirs::picture_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("ScreenshotTool")
+                .join("Caprail")
                 .to_string_lossy()
                 .to_string(),
             default_image_format: "png".to_string(),
@@ -28,7 +28,7 @@ impl Default for AppConfig {
 fn config_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ScreenshotTool")
+        .join("Caprail")
         .join("config.json")
 }
 
@@ -67,7 +67,7 @@ fn set_auto_start(enabled: bool) -> Result<(), String> {
     let key_path: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run\0"
         .encode_utf16()
         .collect();
-    let value_name: Vec<u16> = "ScreenshotTool\0".encode_utf16().collect();
+    let value_name: Vec<u16> = "Caprail\0".encode_utf16().collect();
 
     unsafe {
         let mut hkey = windows::Win32::System::Registry::HKEY::default();

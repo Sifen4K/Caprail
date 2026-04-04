@@ -27,7 +27,7 @@ pub fn ocr_recognize(
     height: u32,
 ) -> Result<OcrResult, String> {
     // Save image to temp file
-    let temp_dir = std::env::temp_dir().join("screenshot-tool-ocr");
+    let temp_dir = std::env::temp_dir().join("caprail-ocr");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_path = temp_dir.join("ocr_input.png");
 

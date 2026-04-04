@@ -48,7 +48,7 @@ pub struct MonitorInfo {
 
 /// Get the temp directory for screenshot files.
 pub fn screenshot_temp_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("screenshot-tool-captures")
+    std::env::temp_dir().join("caprail-captures")
 }
 
 /// Fix alpha channel in BGRA data. GDI BitBlt leaves alpha as 0x00.

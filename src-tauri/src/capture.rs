@@ -323,10 +323,15 @@ pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Resu
         #[cfg(windows)]
         {
             use windows::Win32::Foundation::HWND;
-            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP};
             if let Some(hwnd_val) = exclude_hwnd {
                 let hwnd = HWND(hwnd_val as *mut _);
-                unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
+                unsafe {
+                    // Force the window to erase its content immediately before hiding
+                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
+                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+                }
             }
         }
 
@@ -336,10 +341,14 @@ pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Resu
         #[cfg(windows)]
         {
             use windows::Win32::Foundation::HWND;
-            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP, SWP_SHOWWINDOW};
             if let Some(hwnd_val) = exclude_hwnd {
                 let hwnd = HWND(hwnd_val as *mut _);
-                unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
+                unsafe {
+                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
+                }
             }
         }
 
@@ -366,10 +375,15 @@ pub fn capture_region(x: i32, y: i32, width: i32, height: i32, exclude_hwnd: Opt
         #[cfg(windows)]
         {
             use windows::Win32::Foundation::HWND;
-            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP};
             if let Some(hwnd_val) = exclude_hwnd {
                 let hwnd = HWND(hwnd_val as *mut _);
-                unsafe { let _ = ShowWindow(hwnd, SW_HIDE); }
+                unsafe {
+                    // Force the window to erase its content immediately before hiding
+                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
+                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+                }
             }
         }
 
@@ -379,10 +393,14 @@ pub fn capture_region(x: i32, y: i32, width: i32, height: i32, exclude_hwnd: Opt
         #[cfg(windows)]
         {
             use windows::Win32::Foundation::HWND;
-            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
+            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP, SWP_SHOWWINDOW};
             if let Some(hwnd_val) = exclude_hwnd {
                 let hwnd = HWND(hwnd_val as *mut _);
-                unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }
+                unsafe {
+                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
+                }
             }
         }
 

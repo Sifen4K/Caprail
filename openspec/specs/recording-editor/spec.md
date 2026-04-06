@@ -1,11 +1,15 @@
-## ADDED Requirements
+## Purpose
+
+This specification defines the recording clip editor for Caprail, covering clip preview playback, timeline-based trimming, playback speed adjustment, and timeline navigation with frame thumbnails.
+
+## Requirements
 
 ### Requirement: 录屏预览
-录制完成后系统 SHALL 自动打开剪辑预览窗口，播放录制内容。
+The clip editor page title and all visible control labels SHALL be loaded from the i18n locale file under the `clipEditor.*` key scope.
 
-#### Scenario: 自动打开预览
-- **WHEN** 用户停止录制
-- **THEN** 系统自动打开剪辑窗口，加载录制的视频并开始播放预览
+#### Scenario: Clip editor labels loaded from i18n
+- **WHEN** the clip editor opens
+- **THEN** the page title, play button, speed label, Export MP4 button, and Export GIF button labels are loaded from `clipEditor.title`, `clipEditor.play`, `clipEditor.speed`, `clipEditor.exportMp4`, and `clipEditor.exportGif` respectively
 
 ### Requirement: 时间轴裁剪
 剪辑窗口 SHALL 提供时间轴控件，用户可拖动起点和终点手柄裁剪视频首尾。

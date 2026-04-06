@@ -7,6 +7,16 @@ pub struct AppConfig {
     pub save_path: String,
     pub default_image_format: String,
     pub auto_start: bool,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub tray_menu_screenshot: String,
+    #[serde(default)]
+    pub tray_menu_record: String,
+    #[serde(default)]
+    pub tray_menu_settings: String,
+    #[serde(default)]
+    pub tray_menu_quit: String,
 }
 
 impl Default for AppConfig {
@@ -21,6 +31,11 @@ impl Default for AppConfig {
                 .to_string(),
             default_image_format: "png".to_string(),
             auto_start: false,
+            language: "en".to_string(),
+            tray_menu_screenshot: "Screenshot".to_string(),
+            tray_menu_record: "Record".to_string(),
+            tray_menu_settings: "Settings".to_string(),
+            tray_menu_quit: "Quit".to_string(),
         }
     }
 }
@@ -32,12 +47,46 @@ fn config_path() -> std::path::PathBuf {
         .join("config.json")
 }
 
+/// Synchronous config loader for use inside Tauri setup (not a command)
+pub fn load_config_sync() -> AppConfig {
+    let path = config_path();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(mut config) = serde_json::from_str::<AppConfig>(&content) {
+                apply_defaults(&mut config);
+                return config;
+            }
+        }
+    }
+    AppConfig::default()
+}
+
+fn apply_defaults(cfg: &mut AppConfig) -> bool {
+    let mut changed = false;
+    if cfg.save_path.is_empty() {
+        cfg.save_path = dirs::picture_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Caprail")
+            .to_string_lossy()
+            .to_string();
+        changed = true;
+    }
+    changed
+}
+
 #[tauri::command]
 pub fn load_config() -> Result<AppConfig, String> {
     let path = config_path();
     if path.exists() {
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).map_err(|e| e.to_string())
+        let mut config: AppConfig = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        if apply_defaults(&mut config) {
+            // Empty field detected, persist default back to disk
+            std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+            std::fs::write(&path, content).map_err(|e| e.to_string())?;
+        }
+        Ok(config)
     } else {
         Ok(AppConfig::default())
     }

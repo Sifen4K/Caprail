@@ -1,30 +1,26 @@
-## ADDED Requirements
+## Purpose
+
+This specification defines the screen capture functionality for Caprail, covering area selection, window targeting, full-screen capture, multi-monitor support with DPI handling, and screenshot output methods.
+
+## Requirements
 
 ### Requirement: 区域截图
-系统 SHALL 支持用户通过全屏透明覆盖层拖拽选择矩形区域进行截图。选区过程中 SHALL 显示十字准线和选区尺寸（像素）。选区确认后 SHALL 裁剪对应区域像素并传递给标注编辑器。
+The overlay hint text displayed during screen capture selection SHALL be loaded from the i18n locale file.
 
-#### Scenario: 用户拖拽选区截图
-- **WHEN** 用户按下截图快捷键
-- **THEN** 系统显示全屏透明覆盖层，屏幕内容冻结，鼠标变为十字准线
-
-#### Scenario: 选区过程显示尺寸
-- **WHEN** 用户在覆盖层上拖拽鼠标
-- **THEN** 实时显示选区矩形边框和尺寸标注（宽 x 高 像素）
+#### Scenario: Overlay hint text loaded from i18n
+- **WHEN** the screenshot overlay opens
+- **THEN** the area selection hint text is loaded from `screenshot.selectArea` and the ESC cancel hint is loaded from `screenshot.pressEscCancel`
 
 #### Scenario: 确认选区
 - **WHEN** 用户松开鼠标完成选区
 - **THEN** 系统裁剪选区内像素，关闭覆盖层，打开标注编辑器
 
-#### Scenario: 取消截图
-- **WHEN** 用户在选区过程中按下 Esc 键
-- **THEN** 系统关闭覆盖层，不进行截图
-
 ### Requirement: 窗口截图
-系统 SHALL 支持在截图模式下自动识别鼠标悬停的窗口，高亮显示窗口边界，点击即可截取该窗口。
+The window hover highlight label SHALL format using the i18n key `screenshot.windowInfo` with substitution values `{title}`, `{width}`, and `{height}`.
 
-#### Scenario: 悬停高亮窗口
-- **WHEN** 用户进入截图模式并将鼠标移到某个窗口上方
-- **THEN** 系统高亮显示该窗口的边界轮廓
+#### Scenario: Window info label formatted via i18n
+- **WHEN** the user hovers over a window in screenshot mode
+- **THEN** the window label is formatted using `screenshot.windowInfo` key, producing text such as "Notepad (800x600)"
 
 #### Scenario: 点击截取窗口
 - **WHEN** 用户点击高亮的窗口

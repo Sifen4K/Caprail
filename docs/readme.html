@@ -1,6 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Caprail - README</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 20px; color: #333; }
+    h1, h2, h3 { color: #222; }
+    h1 { font-size: 2em; margin-bottom: 0.5em; }
+    h2 { font-size: 1.4em; margin-top: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; }
+    h3 { font-size: 1.1em; margin-top: 1.2em; }
+    table { border-collapse: collapse; width: 100%; margin: 0.8em 0; }
+    th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+    th { background: #f5f5f5; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+    pre { background: #f4f4f4; padding: 16px; border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    kbd { background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 2px 6px; font-size: 0.85em; }
+    li { margin: 0.3em 0; }
+    .lang-tabs { margin-bottom: 1em; display: flex; gap: 4px; }
+    .lang-tab { background: #f0f0f0; border: 1px solid #ccc; border-bottom: none; padding: 6px 16px; cursor: pointer; font-size: 14px; border-radius: 4px 4px 0 0; }
+    .lang-tab:hover { background: #e0e0e0; }
+    .lang-tab.active { background: #fff; font-weight: bold; }
+    .lang-section { display: none; }
+    .lang-section.active { display: block; }
+    .divider { border: none; border-top: 1px solid #eee; margin: 2em 0; }
+    .back { color: #666; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<p class="back"><a href="../README.md">&larr; Back to README</a></p>
+
+<div class="lang-tabs">
+  <button class="lang-tab active" data-lang="en">English</button>
+  <button class="lang-tab" data-lang="zh">中文</button>
+</div>
+
+<!-- English -->
+<div class="lang-section active" id="section-en">
+
 # Caprail
 
-A screenshot and screen recording tool for Windows. / [中文](#用户手册) / [English](#user-guide)
+A screenshot and screen recording tool for Windows.
 
 ---
 
@@ -146,6 +187,19 @@ Caprail/
 | App config | `%APPDATA%/Caprail/config.json` |
 | Runtime logs | `%LOCALAPPDATA%/Caprail/logs/` |
 | Temp files | `%TEMP%/caprail-captures/` |
+
+## License
+
+MIT
+
+</div>
+
+<!-- Chinese -->
+<div class="lang-section" id="section-zh">
+
+# Caprail
+
+Windows 平台的截图与录屏工具。
 
 ---
 
@@ -295,3 +349,30 @@ Caprail/
 ## License
 
 MIT
+
+</div>
+
+<script>
+(function() {
+  var tabs = document.querySelectorAll('.lang-tab');
+  var sections = document.querySelectorAll('.lang-section');
+
+  function activate(lang) {
+    tabs.forEach(function(t) { t.classList.toggle('active', t.dataset.lang === lang); });
+    sections.forEach(function(s) { s.classList.toggle('active', s.id === 'section-' + lang); });
+    try { localStorage.setItem('readme-lang', lang); } catch(e) {}
+  }
+
+  tabs.forEach(function(tab) {
+    tab.addEventListener('click', function() { activate(tab.dataset.lang); });
+  });
+
+  try {
+    var saved = localStorage.getItem('readme-lang');
+    if (saved) activate(saved);
+  } catch(e) {}
+})();
+</script>
+
+</body>
+</html>

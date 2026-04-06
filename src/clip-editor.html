@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Recording Editor</title>
@@ -135,7 +135,7 @@
     <div id="control-row">
       <button class="ctrl-btn" id="play-btn">▶</button>
       <span id="time-display">00:00 / 00:00</span>
-      <label>Speed:
+      <label><span data-i18n="clipEditor.speed">Speed:</span>
         <select id="speed-select">
           <option value="0.5">0.5x</option>
           <option value="1" selected>1x</option>
@@ -145,13 +145,18 @@
         </select>
       </label>
       <div class="spacer"></div>
-      <button class="ctrl-btn primary" id="export-mp4-btn">Export MP4</button>
-      <button class="ctrl-btn" id="export-gif-btn">Export GIF</button>
+      <button class="ctrl-btn primary" id="export-mp4-btn" data-i18n="clipEditor.exportMp4">Export MP4</button>
+      <button class="ctrl-btn" id="export-gif-btn" data-i18n="clipEditor.exportGif">Export GIF</button>
     </div>
     <div id="export-progress">
       <div id="export-progress-bar"></div>
     </div>
   </div>
-  <script type="module" src="./scripts/clip-editor.ts"></script>
+  <script type="module">
+    import { loadLocale } from "./scripts/i18n.ts";
+    const params = new URLSearchParams(window.location.search);
+    loadLocale(params.get("lang") || "en");
+    import("./scripts/clip-editor.ts");
+  </script>
 </body>
 </html>

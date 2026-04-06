@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
+import { loadLocale, t } from "./i18n.ts";
 
 const canvas = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -49,10 +50,10 @@ function draw() {
     ctx.font = "24px sans-serif";
     ctx.fillStyle = "#fff";
     ctx.textAlign = "center";
-    ctx.fillText("Drag to select recording area", canvas.width / 2, canvas.height / 2);
+    ctx.fillText(t("recordOverlay.selectArea"), canvas.width / 2, canvas.height / 2);
     ctx.font = "16px sans-serif";
     ctx.fillStyle = "#aaa";
-    ctx.fillText("Press ESC to cancel", canvas.width / 2, canvas.height / 2 + 30);
+    ctx.fillText(t("recordOverlay.pressEscCancel"), canvas.width / 2, canvas.height / 2 + 30);
     ctx.textAlign = "start";
   }
 
@@ -119,3 +120,4 @@ window.addEventListener("keydown", async (e) => {
 });
 
 window.addEventListener("load", resize);
+loadLocale(new URLSearchParams(document.location.search).get("lang") || "en");

@@ -71,13 +71,14 @@ pub fn run() {
             match app.tray_by_id("main-tray") {
                 Some(tray) => {
                     info!("Tray icon found, setting up menu...");
+                    let cfg = config::load_config_sync();
                     let menu = tauri::menu::Menu::with_items(
                         app,
                         &[
-                            &tauri::menu::MenuItem::with_id(app, "screenshot", "截图", true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "record", "录屏", true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?,
+                            &tauri::menu::MenuItem::with_id(app, "screenshot", &cfg.tray_menu_screenshot, true, None::<&str>)?,
+                            &tauri::menu::MenuItem::with_id(app, "record", &cfg.tray_menu_record, true, None::<&str>)?,
+                            &tauri::menu::MenuItem::with_id(app, "settings", &cfg.tray_menu_settings, true, None::<&str>)?,
+                            &tauri::menu::MenuItem::with_id(app, "quit", &cfg.tray_menu_quit, true, None::<&str>)?,
                         ],
                     )?;
                     let _ = tray.set_menu(Some(menu));

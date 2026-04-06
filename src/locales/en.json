@@ -1,0 +1,95 @@
+{
+  "appShell": {
+    "title": "Caprail",
+    "status": "Ready",
+    "hint": {
+      "tray": "Right-click the tray icon to start.",
+      "shortcuts": "Default shortcuts:",
+      "screenshot": "Screenshot:",
+      "record": "Record:"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "screenshotShortcut": "Screenshot shortcut:",
+    "recordShortcut": "Record shortcut:",
+    "savePath": "Save path:",
+    "defaultFormat": "Default format:",
+    "autoStart": "Auto-start on login:",
+    "save": "Save",
+    "shortcutPlaceholder": "Press shortcut...",
+    "validation": {
+      "bothRequired": "Both shortcuts must be set!",
+      "needsModifier": "%NAME% must include at least one modifier (Ctrl/Shift/Alt) and one key",
+      "cannotBeSame": "Screenshot and record shortcuts cannot be the same!"
+    }
+  },
+  "editor": {
+    "title": "Annotation Editor",
+    "tool": {
+      "rect": "Rectangle",
+      "ellipse": "Ellipse",
+      "arrow": "Arrow",
+      "pen": "Pen",
+      "text": "Text",
+      "mosaic": "Mosaic",
+      "blur": "Blur",
+      "stamp": "Stamp",
+      "color": "Color",
+      "lineWidth": "Line Width",
+      "fontSize": "Font Size"
+    },
+    "action": {
+      "undo": "Undo (Ctrl+Z)",
+      "redo": "Redo (Ctrl+Y)",
+      "copy": "Copy to Clipboard (Ctrl+C)",
+      "save": "Save (Ctrl+S)",
+      "pin": "Pin to Screen",
+      "ocr": "Extract Text"
+    },
+    "ocr": {
+      "header": "OCR Results",
+      "copyAll": "Copy All",
+      "close": "Close"
+    },
+    "stamp": {
+      "counter": "Counter",
+      "check": "Check",
+      "cross": "Cross",
+      "star": "Star"
+    },
+    "error": {
+      "loadScreenshot": "Failed to load screenshot"
+    }
+  },
+  "screenshot": {
+    "title": "Screenshot",
+    "selectArea": "Drag to select area",
+    "pressEscCancel": "Press ESC to cancel",
+    "windowInfo": "%TITLE% (%W%x%H%)"
+  },
+  "recordOverlay": {
+    "selectArea": "Drag to select recording area",
+    "pressEscCancel": "Press ESC to cancel"
+  },
+  "clipEditor": {
+    "title": "Recording Editor",
+    "play": "Play",
+    "speed": "Speed:",
+    "exportMp4": "Export MP4",
+    "exportGif": "Export GIF"
+  },
+  "pin": {
+    "title": "Pin"
+  },
+  "recordControl": {
+    "pauseResume": "Pause/Resume",
+    "stopRecording": "Stop Recording"
+  },
+  "tray": {
+    "screenshot": "Screenshot",
+    "record": "Record",
+    "settings": "Settings",
+    "quit": "Quit"
+  }
+}

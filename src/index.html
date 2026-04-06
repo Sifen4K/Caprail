@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,17 +11,22 @@
     <div class="placeholder">
       <h1>ScreenshotTool</h1>
       <p>Screenshot & Recording Tool</p>
-      <p id="status">Ready</p>
+      <p id="status" data-i18n="appShell.status">Ready</p>
       <div class="hint">
-        <p>Right-click the tray icon to start.</p>
-        <p>Default shortcuts:</p>
+        <p data-i18n="appShell.hint.tray">Right-click the tray icon to start.</p>
+        <p data-i18n="appShell.hint.shortcuts">Default shortcuts:</p>
         <ul>
-          <li>Screenshot: <kbd>Ctrl+Shift+A</kbd></li>
-          <li>Record: <kbd>Ctrl+Shift+R</kbd></li>
+          <li><span data-i18n="appShell.hint.screenshot">Screenshot:</span> <kbd>Ctrl+Shift+A</kbd></li>
+          <li><span data-i18n="appShell.hint.record">Record:</span> <kbd>Ctrl+Shift+R</kbd></li>
         </ul>
       </div>
     </div>
   </div>
-  <script type="module" src="./scripts/main.ts"></script>
+  <script type="module">
+    import { loadLocale } from "./scripts/i18n.ts";
+    const params = new URLSearchParams(window.location.search);
+    loadLocale(params.get("lang") || "en");
+    import("./scripts/main.ts");
+  </script>
 </body>
 </html>

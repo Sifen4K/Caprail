@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Recording</title>
@@ -63,9 +63,14 @@
   <div id="control-bar">
     <div class="rec-dot" id="rec-dot"></div>
     <span id="duration">00:00</span>
-    <button class="ctrl-btn" id="pause-btn" title="暂停/恢复">⏸</button>
-    <button class="ctrl-btn stop" id="stop-btn" title="停止录制">⏹</button>
+    <button class="ctrl-btn" id="pause-btn" data-i18n="recordControl.pauseResume" title="Pause/Resume">⏸</button>
+    <button class="ctrl-btn stop" id="stop-btn" data-i18n="recordControl.stopRecording" title="Stop Recording">⏹</button>
   </div>
-  <script type="module" src="./scripts/record-control.ts"></script>
+  <script type="module">
+    import { loadLocale } from "./scripts/i18n.ts";
+    const params = new URLSearchParams(window.location.search);
+    loadLocale(params.get("lang") || "en");
+    import("./scripts/record-control.ts");
+  </script>
 </body>
 </html>

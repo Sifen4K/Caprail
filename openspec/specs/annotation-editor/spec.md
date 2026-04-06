@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+This specification defines the annotation editor for Caprail, providing tools to annotate screenshots with shapes, text, blur, and stamps. Requirements cover the annotation toolbar, drawing tools, undo/redo, layered canvas rendering, and module organization.
+
+## Requirements
 
 ### Requirement: 矩形标注
 系统 SHALL 支持在截图上绘制矩形标注，可自定义边框颜色、线宽。
@@ -62,22 +66,18 @@
 - **THEN** 系统在点击位置放置对应的图标标记
 
 ### Requirement: 标注撤销/重做
-系统 SHALL 支持撤销和重做标注操作。
+All action button `title` attributes in the annotation editor (undo, redo, copy, save, pin, ocr) SHALL be loaded from the i18n locale file under the `editor.action.*` key scope.
 
-#### Scenario: 撤销标注
-- **WHEN** 用户按下 Ctrl+Z
-- **THEN** 系统撤销最近一次标注操作
-
-#### Scenario: 重做标注
-- **WHEN** 用户按下 Ctrl+Y
-- **THEN** 系统重做最近一次被撤销的标注操作
+#### Scenario: Action button tooltips loaded from i18n
+- **WHEN** the annotation editor opens
+- **THEN** the undo, redo, copy, save, pin, and ocr button `title` attributes are loaded from `editor.action.undo`, `editor.action.redo`, `editor.action.copy`, `editor.action.save`, `editor.action.pin`, and `editor.action.ocr` respectively
 
 ### Requirement: 标注工具栏
-系统 SHALL 在标注编辑器中显示工具栏，包含所有标注工具、颜色选择器、线宽控制。工具栏位置 SHALL 跟随截图区域，不遮挡截图内容。编辑器代码 SHALL 按职责拆分为独立模块。编辑器 SHALL 使用分层渲染架构（bufferCanvas + mainCanvas）提升重绘性能。工具栏 SHALL 支持自动换行布局，在窗口宽度不足时自动调整为多行显示。
+All tool button `title` attributes in the annotation editor toolbar SHALL be loaded from the i18n locale file under the `editor.tool.*` key scope.
 
-#### Scenario: 工具栏显示
-- **WHEN** 标注编辑器打开
-- **THEN** 工具栏显示在截图区域下方或上方，包含所有标注工具按钮
+#### Scenario: Toolbar tooltips loaded from i18n
+- **WHEN** the annotation editor opens
+- **THEN** all tool button `title` attributes (rect, ellipse, arrow, pen, text, mosaic, blur, stamp) are loaded from i18n locale keys `editor.tool.*`
 
 #### Scenario: 编辑器从 URL 参数加载图像
 - **WHEN** 标注编辑器窗口被创建

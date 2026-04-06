@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { loadLocale } from "./i18n.ts";
+
+loadLocale("en");
 
 interface AppConfig {
   screenshot_shortcut: string;
@@ -7,6 +10,11 @@ interface AppConfig {
   save_path: string;
   default_image_format: string;
   auto_start: boolean;
+  language: string;
+  tray_menu_screenshot: string;
+  tray_menu_record: string;
+  tray_menu_settings: string;
+  tray_menu_quit: string;
 }
 
 const screenshotInput = document.getElementById("screenshot-shortcut") as HTMLInputElement;
@@ -69,6 +77,11 @@ document.getElementById("save")!.onclick = async () => {
     save_path: (document.getElementById("save-path") as HTMLInputElement).value,
     default_image_format: (document.getElementById("default-format") as HTMLSelectElement).value,
     auto_start: (document.getElementById("auto-start") as HTMLInputElement).checked,
+    tray_menu_screenshot: "Screenshot",
+    tray_menu_record: "Record",
+    tray_menu_settings: "Settings",
+    tray_menu_quit: "Quit",
+    language: "en",
   };
 
   // Validate shortcuts

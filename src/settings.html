@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Settings</title>
@@ -47,31 +47,31 @@
   </style>
 </head>
 <body>
-  <h1>Settings</h1>
+  <h1 data-i18n="settings.title">Settings</h1>
   <div class="row">
-    <label>Screenshot shortcut:</label>
+    <label data-i18n="settings.screenshotShortcut">Screenshot shortcut:</label>
     <input id="screenshot-shortcut" value="Ctrl+Shift+A">
   </div>
   <div class="row">
-    <label>Record shortcut:</label>
+    <label data-i18n="settings.recordShortcut">Record shortcut:</label>
     <input id="record-shortcut" value="Ctrl+Shift+R">
   </div>
   <div class="row">
-    <label>Save path:</label>
+    <label data-i18n="settings.savePath">Save path:</label>
     <input id="save-path" value="">
   </div>
   <div class="row">
-    <label>Default format:</label>
+    <label data-i18n="settings.defaultFormat">Default format:</label>
     <select id="default-format">
       <option value="png">PNG</option>
       <option value="jpg">JPG</option>
     </select>
   </div>
   <div class="row">
-    <label>Auto-start on login:</label>
+    <label data-i18n="settings.autoStart">Auto-start on login:</label>
     <input type="checkbox" id="auto-start">
   </div>
-  <button id="save">Save</button>
+  <button id="save" data-i18n="settings.save">Save</button>
   <script type="module" src="./scripts/settings-page.ts"></script>
 </body>
 </html>

@@ -1,0 +1,95 @@
+{
+  "appShell": {
+    "title": "Caprail",
+    "status": "就绪",
+    "hint": {
+      "tray": "右键托盘图标开始使用",
+      "shortcuts": "默认快捷键：",
+      "screenshot": "截图：",
+      "record": "录屏："
+    }
+  },
+  "settings": {
+    "title": "设置",
+    "screenshotShortcut": "截图快捷键：",
+    "recordShortcut": "录屏快捷键：",
+    "savePath": "保存路径：",
+    "defaultFormat": "默认格式：",
+    "autoStart": "开机自启：",
+    "save": "保存",
+    "shortcutPlaceholder": "按下快捷键...",
+    "validation": {
+      "bothRequired": "快捷键不能为空！",
+      "needsModifier": "%NAME% 必须包含一个修饰键（Ctrl/Shift/Alt）和一个按键",
+      "cannotBeSame": "截图和录屏快捷键不能相同！"
+    }
+  },
+  "editor": {
+    "title": "截图标注编辑器",
+    "tool": {
+      "rect": "矩形",
+      "ellipse": "椭圆",
+      "arrow": "箭头",
+      "pen": "画笔",
+      "text": "文字",
+      "mosaic": "马赛克",
+      "blur": "模糊",
+      "stamp": "记号",
+      "color": "颜色",
+      "lineWidth": "线宽",
+      "fontSize": "字号"
+    },
+    "action": {
+      "undo": "撤销 (Ctrl+Z)",
+      "redo": "重做 (Ctrl+Y)",
+      "copy": "复制到剪贴板 (Ctrl+C)",
+      "save": "保存 (Ctrl+S)",
+      "pin": "钉在屏幕上",
+      "ocr": "提取文字"
+    },
+    "ocr": {
+      "header": "OCR 识别结果",
+      "copyAll": "复制全部",
+      "close": "关闭"
+    },
+    "stamp": {
+      "counter": "计数器",
+      "check": "勾选",
+      "cross": "叉号",
+      "star": "星号"
+    },
+    "error": {
+      "loadScreenshot": "截图加载失败"
+    }
+  },
+  "screenshot": {
+    "title": "截图",
+    "selectArea": "拖动框选区域",
+    "pressEscCancel": "按 ESC 取消",
+    "windowInfo": "%TITLE% (%W%x%H%)"
+  },
+  "recordOverlay": {
+    "selectArea": "拖动框选录屏区域",
+    "pressEscCancel": "按 ESC 取消"
+  },
+  "clipEditor": {
+    "title": "录屏编辑器",
+    "play": "播放",
+    "speed": "速度：",
+    "exportMp4": "导出 MP4",
+    "exportGif": "导出 GIF"
+  },
+  "pin": {
+    "title": "钉图"
+  },
+  "recordControl": {
+    "pauseResume": "暂停/恢复",
+    "stopRecording": "停止录制"
+  },
+  "tray": {
+    "screenshot": "截图",
+    "record": "录屏",
+    "settings": "设置",
+    "quit": "退出"
+  }
+}

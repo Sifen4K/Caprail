@@ -1,15 +1,15 @@
-## ADDED Requirements
+## Purpose
+
+This specification defines the application shell for Caprail, covering system tray integration, global hotkeys, settings persistence, auto-start, and installer/uninstaller behavior.
+
+## Requirements
 
 ### Requirement: 系统托盘
-应用启动后 SHALL 在系统托盘显示图标，常驻后台运行。
+The system tray menu items SHALL display labels loaded from `AppConfig` fields `tray_menu_screenshot`, `tray_menu_record`, `tray_menu_settings`, `tray_menu_quit`. English defaults are hardcoded in Rust `lib.rs`.
 
-#### Scenario: 托盘图标显示
-- **WHEN** 应用启动
-- **THEN** 系统托盘区域显示应用图标
-
-#### Scenario: 托盘右键菜单
-- **WHEN** 用户右键点击托盘图标
-- **THEN** 显示菜单，包含：截图、录屏、设置、退出 等选项
+#### Scenario: Tray menu displays localized labels
+- **WHEN** the application starts and builds the system tray menu
+- **THEN** each menu item label is read from `AppConfig`; if a field is absent, the English default is used
 
 #### Scenario: 最小化到托盘
 - **WHEN** 用户关闭主窗口
@@ -31,19 +31,11 @@
 - **THEN** 系统提示快捷键注册失败，引导用户修改
 
 ### Requirement: 设置界面
-系统 SHALL 提供设置界面，允许用户配置快捷键、默认保存路径、默认图片格式等。
+The settings window SHALL display all labels and button text loaded from the i18n locale file under the `settings.*` key scope.
 
-#### Scenario: 打开设置
-- **WHEN** 用户通过托盘菜单或快捷键打开设置
-- **THEN** 显示设置窗口，包含各项配置选项
-
-#### Scenario: 修改快捷键
-- **WHEN** 用户在设置中点击快捷键输入框并按下新的组合键
-- **THEN** 系统更新全局快捷键注册
-
-#### Scenario: 设置持久化
-- **WHEN** 用户修改设置并关闭设置窗口
-- **THEN** 设置保存到本地配置文件，下次启动自动加载
+#### Scenario: Settings labels are loaded from locale
+- **WHEN** the settings window opens
+- **THEN** all label text and button text is loaded from the i18n locale file for keys such as `settings.title`, `settings.screenshotShortcut`, `settings.recordShortcut`, `settings.savePath`, `settings.defaultFormat`, `settings.autoStart`, and `settings.save`
 
 ### Requirement: 安装包
 系统 SHALL 提供 Windows 安装包（NSIS 或 MSI），支持一键安装和卸载。

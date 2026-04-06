@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,29 +10,29 @@
   <div id="editor-container">
     <div id="toolbar">
       <div class="tool-group">
-        <button class="tool-btn active" data-tool="rect" title="矩形">▭</button>
-        <button class="tool-btn" data-tool="ellipse" title="椭圆">○</button>
-        <button class="tool-btn" data-tool="arrow" title="箭头">→</button>
-        <button class="tool-btn" data-tool="pen" title="画笔">✎</button>
-        <button class="tool-btn" data-tool="text" title="文字">A</button>
-        <button class="tool-btn" data-tool="mosaic" title="马赛克">▦</button>
-        <button class="tool-btn" data-tool="blur" title="模糊">◎</button>
-        <button class="tool-btn" data-tool="stamp" title="记号">①</button>
+        <button class="tool-btn active" data-tool="rect" data-i18n="editor.tool.rect" title="Rectangle">▭</button>
+        <button class="tool-btn" data-tool="ellipse" data-i18n="editor.tool.ellipse" title="Ellipse">○</button>
+        <button class="tool-btn" data-tool="arrow" data-i18n="editor.tool.arrow" title="Arrow">→</button>
+        <button class="tool-btn" data-tool="pen" data-i18n="editor.tool.pen" title="Pen">✎</button>
+        <button class="tool-btn" data-tool="text" data-i18n="editor.tool.text" title="Text">A</button>
+        <button class="tool-btn" data-tool="mosaic" data-i18n="editor.tool.mosaic" title="Mosaic">▦</button>
+        <button class="tool-btn" data-tool="blur" data-i18n="editor.tool.blur" title="Blur">◎</button>
+        <button class="tool-btn" data-tool="stamp" data-i18n="editor.tool.stamp" title="Stamp">①</button>
       </div>
       <div class="tool-group">
-        <input type="color" id="color-picker" value="#ff0000" title="颜色">
-        <input type="range" id="line-width" min="1" max="10" value="2" title="线宽">
-        <input type="range" id="font-size" min="12" max="48" value="16" title="字号" style="display:none">
+        <input type="color" id="color-picker" value="#ff0000" data-i18n="editor.tool.color" title="Color">
+        <input type="range" id="line-width" min="1" max="10" value="2" data-i18n="editor.tool.lineWidth" title="Line Width">
+        <input type="range" id="font-size" min="12" max="48" value="16" data-i18n="editor.tool.fontSize" title="Font Size" style="display:none">
       </div>
       <div class="tool-group">
-        <button class="action-btn" id="undo-btn" title="撤销 (Ctrl+Z)">↩</button>
-        <button class="action-btn" id="redo-btn" title="重做 (Ctrl+Y)">↪</button>
+        <button class="action-btn" id="undo-btn" data-i18n="editor.action.undo" title="Undo (Ctrl+Z)">↩</button>
+        <button class="action-btn" id="redo-btn" data-i18n="editor.action.redo" title="Redo (Ctrl+Y)">↪</button>
       </div>
       <div class="tool-group">
-        <button class="action-btn" id="copy-btn" title="复制到剪贴板 (Ctrl+C)">📋</button>
-        <button class="action-btn" id="save-btn" title="保存 (Ctrl+S)">💾</button>
-        <button class="action-btn" id="pin-btn" title="钉在屏幕上">📌</button>
-        <button class="action-btn" id="ocr-btn" title="提取文字">🔤</button>
+        <button class="action-btn" id="copy-btn" data-i18n="editor.action.copy" title="Copy to Clipboard (Ctrl+C)">📋</button>
+        <button class="action-btn" id="save-btn" data-i18n="editor.action.save" title="Save (Ctrl+S)">💾</button>
+        <button class="action-btn" id="pin-btn" data-i18n="editor.action.pin" title="Pin to Screen">📌</button>
+        <button class="action-btn" id="ocr-btn" data-i18n="editor.action.ocr" title="Extract Text">🔤</button>
       </div>
     </div>
     <div id="canvas-wrapper">
@@ -40,9 +40,9 @@
     </div>
     <div id="ocr-panel" style="display:none">
       <div id="ocr-header">
-        <span>OCR Results</span>
-        <button id="ocr-copy-btn">Copy All</button>
-        <button id="ocr-close-btn">✕</button>
+        <span data-i18n="editor.ocr.header">OCR Results</span>
+        <button id="ocr-copy-btn" data-i18n="editor.ocr.copyAll">Copy All</button>
+        <button id="ocr-close-btn" data-i18n="editor.ocr.close">✕</button>
       </div>
       <textarea id="ocr-text" readonly></textarea>
     </div>
@@ -51,11 +51,16 @@
     <textarea id="text-input"></textarea>
   </div>
   <div id="stamp-menu" style="display:none">
-    <button class="stamp-btn" data-stamp="counter">①</button>
-    <button class="stamp-btn" data-stamp="check">✓</button>
-    <button class="stamp-btn" data-stamp="cross">✗</button>
-    <button class="stamp-btn" data-stamp="star">★</button>
+    <button class="stamp-btn" data-stamp="counter" data-i18n="editor.stamp.counter">①</button>
+    <button class="stamp-btn" data-stamp="check" data-i18n="editor.stamp.check">✓</button>
+    <button class="stamp-btn" data-stamp="cross" data-i18n="editor.stamp.cross">✗</button>
+    <button class="stamp-btn" data-stamp="star" data-i18n="editor.stamp.star">★</button>
   </div>
-  <script type="module" src="./scripts/editor.ts"></script>
+  <script type="module">
+    import { loadLocale } from "./scripts/i18n.ts";
+    const params = new URLSearchParams(window.location.search);
+    loadLocale(params.get("lang") || "en");
+    import("./scripts/editor.ts");
+  </script>
 </body>
 </html>

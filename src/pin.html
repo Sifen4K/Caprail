@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Pin</title>
@@ -33,6 +33,11 @@
 <body>
   <canvas id="pin-image"></canvas>
   <div id="pin-border"></div>
-  <script type="module" src="./scripts/pin.ts"></script>
+  <script type="module">
+    import { loadLocale } from "./scripts/i18n.ts";
+    const params = new URLSearchParams(window.location.search);
+    loadLocale(params.get("lang") || "en");
+    import("./scripts/pin.ts");
+  </script>
 </body>
 </html>

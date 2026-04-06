@@ -167,17 +167,19 @@ function draw() {
     ctx.fillText(label, labelX, labelY, logicalWidth - 8);
   }
 
-  // Crosshair
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath();
-  ctx.moveTo(0, currentY);
-  ctx.lineTo(canvas.width, currentY);
-  ctx.moveTo(currentX, 0);
-  ctx.lineTo(currentX, canvas.height);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Crosshair - only draw when not selecting (to avoid capturing guide lines in screenshot)
+  if (!isSelecting) {
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, currentY);
+    ctx.lineTo(canvas.width, currentY);
+    ctx.moveTo(currentX, 0);
+    ctx.lineTo(currentX, canvas.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 canvas.addEventListener("mousedown", (e) => {

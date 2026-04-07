@@ -20,6 +20,14 @@ interface MonitorInfo {
   is_primary: boolean;
 }
 
+// Pre-capture parameters from URL
+const params = new URLSearchParams(window.location.search);
+const precaptureId = parseInt(params.get("precaptureId")!);
+const vsOriginX = parseInt(params.get("originX")!);
+const vsOriginY = parseInt(params.get("originY")!);
+const vsWidth = parseInt(params.get("vsWidth")!);
+const vsHeight = parseInt(params.get("vsHeight")!);
+
 const canvas = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
@@ -39,14 +47,23 @@ let monitorOriginX = 0;
 let monitorOriginY = 0;
 let monitorList: MonitorInfo[] = [];
 
+// Offscreen canvas holding the pre-captured virtual screen image
+let bgCanvas: HTMLCanvasElement | null = null;
+
 async function init() {
+  // Lock window position to prevent dragging
+  try {
+    await invoke("lock_window_position", { label: "screenshot-overlay" });
+  } catch (e) {
+    console.error("lock_window_position failed:", e);
+  }
+
   const sz = await getCurrentWindow().innerSize();
   canvas.width = sz.width;
   canvas.height = sz.height;
 
   // Get DPI scaling factor
   dpiScale = window.devicePixelRatio;
-  console.log("DPI scale factor:", dpiScale);
 
   // Load monitor info for coordinate mapping
   try {
@@ -69,17 +86,27 @@ async function init() {
     windowList = [];
   }
 
+  // Load pre-captured virtual screen image
+  try {
+    const buffer = await invoke<ArrayBuffer>("read_screenshot", { id: precaptureId });
+    const bytes = new Uint8ClampedArray(buffer);
+    const imageData = new ImageData(bytes, vsWidth, vsHeight);
+
+    bgCanvas = document.createElement("canvas");
+    bgCanvas.width = vsWidth;
+    bgCanvas.height = vsHeight;
+    bgCanvas.getContext("2d")!.putImageData(imageData, 0, 0);
+  } catch (err) {
+    console.error("Failed to load pre-capture:", err);
+  }
+
   draw();
 }
 
 // Convert physical pixel coordinates to overlay window relative logical coordinates
 function physicalToOverlayLogical(physicalX: number, physicalY: number): { x: number; y: number } {
-  // Physical coordinates from get_windows are in screen pixels
-  // Overlay window starts at (monitorOriginX, monitorOriginY) in physical coordinates
-  // Need to convert to logical coordinates relative to overlay window
   const overlayPhysicalX = physicalX - monitorOriginX;
   const overlayPhysicalY = physicalY - monitorOriginY;
-  // Convert to logical coordinates by dividing by DPI scale
   return {
     x: overlayPhysicalX / dpiScale,
     y: overlayPhysicalY / dpiScale
@@ -107,8 +134,22 @@ function findWindowAt(x: number, y: number): WindowInfo | null {
   return best;
 }
 
+// Draw a region from the pre-captured image onto the main canvas (replaces clearRect)
+function drawBackground(x: number, y: number, w: number, h: number) {
+  if (!bgCanvas) return;
+  // Convert overlay logical coords to pre-capture physical pixel coords
+  const srcX = x * dpiScale;
+  const srcY = y * dpiScale;
+  const srcW = w * dpiScale;
+  const srcH = h * dpiScale;
+  ctx.drawImage(bgCanvas, srcX, srcY, srcW, srcH, x, y, w, h);
+}
+
 function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Draw the full pre-captured image as background
+  if (bgCanvas) {
+    ctx.drawImage(bgCanvas, 0, 0, bgCanvas.width, bgCanvas.height, 0, 0, canvas.width / dpiScale, canvas.height / dpiScale);
+  }
 
   // Semi-transparent dark overlay
   ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
@@ -123,7 +164,8 @@ function draw() {
       h: Math.abs(currentY - startY),
     };
     if (rect.w > 2 && rect.h > 2) {
-      ctx.clearRect(rect.x, rect.y, rect.w, rect.h);
+      // Draw the un-tinted pre-capture for the selected region (cut a hole in the dark overlay)
+      drawBackground(rect.x, rect.y, rect.w, rect.h);
 
       ctx.strokeStyle = "#4CAF50";
       ctx.lineWidth = 2;
@@ -148,7 +190,8 @@ function draw() {
     const logicalWidth = bottomRight.x - topLeft.x;
     const logicalHeight = bottomRight.y - topLeft.y;
 
-    ctx.clearRect(topLeft.x, topLeft.y, logicalWidth, logicalHeight);
+    // Draw the un-tinted pre-capture for the window region
+    drawBackground(topLeft.x, topLeft.y, logicalWidth, logicalHeight);
 
     ctx.strokeStyle = "#4CAF50";
     ctx.lineWidth = 2;
@@ -167,7 +210,7 @@ function draw() {
     ctx.fillText(label, labelX, labelY, logicalWidth - 8);
   }
 
-  // Crosshair - only draw when not selecting (to avoid capturing guide lines in screenshot)
+  // Crosshair - only draw when not selecting
   if (!isSelecting) {
     ctx.strokeStyle = "rgba(255,255,255,0.5)";
     ctx.lineWidth = 1;
@@ -218,9 +261,6 @@ canvas.addEventListener("mouseup", async () => {
   const dragW = Math.abs(currentX - startX);
   const dragH = Math.abs(currentY - startY);
 
-  // Clear canvas before capture to avoid green lines in screenshot
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   let captureRect: { x: number; y: number; w: number; h: number };
 
   if (dragW > 5 && dragH > 5) {
@@ -255,21 +295,22 @@ canvas.addEventListener("mouseup", async () => {
   }
 
   try {
-    // Get current window handle to exclude from capture
-    const win = getCurrentWindow();
-    const hwnd = (win as any).hwnd as number;
-
+    // Crop from the pre-captured image — no live screen capture needed
     const result = await invoke<{ id: number; width: number; height: number }>(
-      "capture_region",
+      "crop_precapture",
       {
+        precaptureId: precaptureId,
         x: captureRect.x,
         y: captureRect.y,
         width: captureRect.w,
         height: captureRect.h,
-        exclude_hwnd: hwnd,
+        originX: vsOriginX,
+        originY: vsOriginY,
       }
     );
     await emit("screenshot-captured", result);
+    // Clean up the pre-capture buffer
+    await invoke("cleanup_screenshot", { id: precaptureId });
   } catch (err) {
     console.error("Capture failed:", err);
   }
@@ -279,15 +320,41 @@ canvas.addEventListener("mouseup", async () => {
 });
 
 async function captureFullScreen() {
-  try {
-    const win = getCurrentWindow();
-    const hwnd = (win as any).hwnd as number;
+  // Determine which monitor the cursor is on
+  const physicalX = monitorOriginX + currentX * dpiScale;
+  const physicalY = monitorOriginY + currentY * dpiScale;
 
+  let target = monitorList[0];
+  for (const m of monitorList) {
+    if (physicalX >= m.x && physicalX < m.x + m.width &&
+        physicalY >= m.y && physicalY < m.y + m.height) {
+      target = m;
+      break;
+    }
+  }
+
+  if (!target) {
+    console.error("No monitor found for cursor position");
+    const win = getCurrentWindow();
+    await win.close();
+    return;
+  }
+
+  try {
     const result = await invoke<{ id: number; width: number; height: number }>(
-      "capture_screen",
-      { monitorIndex: 0, excludeHwnd: hwnd }
+      "crop_precapture",
+      {
+        precaptureId: precaptureId,
+        x: target.x,
+        y: target.y,
+        width: target.width,
+        height: target.height,
+        originX: vsOriginX,
+        originY: vsOriginY,
+      }
     );
     await emit("screenshot-captured", result);
+    await invoke("cleanup_screenshot", { id: precaptureId });
   } catch (err) {
     console.error("Full screen capture failed:", err);
   }
@@ -297,6 +364,8 @@ async function captureFullScreen() {
 
 window.addEventListener("keydown", async (e) => {
   if (e.key === "Escape") {
+    // Clean up pre-capture before closing
+    await invoke("cleanup_screenshot", { id: precaptureId });
     await emit("screenshot-cancelled", {});
     const win = getCurrentWindow();
     await win.close();

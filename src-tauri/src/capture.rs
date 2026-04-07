@@ -1,8 +1,88 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use std::sync::RwLock;
 use tauri::ipc::Response;
+use tracing::info;
+
+/// Original window procedure, stored for call-forwarding.
+static ORIG_OVERLAY_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+
+/// Replacement window procedure: returns HTCLIENT for WM_NCHITTEST and blocks SC_MOVE.
+#[cfg(windows)]
+unsafe extern "system" fn overlay_wndproc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    if msg == WM_NCHITTEST {
+        return LRESULT(1); // HTCLIENT
+    }
+    if msg == WM_SYSCOMMAND && (wparam.0 & 0xFFF0) == SC_MOVE as usize {
+        return LRESULT(0);
+    }
+
+    let orig = ORIG_OVERLAY_WNDPROC.load(Ordering::Relaxed);
+    if orig != 0 {
+        let proc: WNDPROC = std::mem::transmute(orig);
+        CallWindowProcW(proc, hwnd, msg, wparam, lparam)
+    } else {
+        DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+}
+
+/// Subclass a window to prevent dragging/resizing and remove the thick frame border.
+#[tauri::command]
+pub fn lock_window_position(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+
+        let window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("Window '{}' not found", label))?;
+
+        let raw = window.hwnd().map_err(|e| e.to_string())?;
+        let hwnd = HWND(raw.0);
+
+        unsafe {
+            // Subclass the window procedure to block drag/resize
+            let old = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as isize);
+            ORIG_OVERLAY_WNDPROC.store(old, Ordering::Relaxed);
+
+            // Shift the window so the client area starts at the original window position.
+            // The non-client frame (WS_CAPTION border) pushes the client area inward;
+            // compensate by moving the window by the frame offset so the border
+            // falls off-screen and the client area covers the full screen.
+            let mut wr = windows::Win32::Foundation::RECT::default();
+            let _ = GetWindowRect(hwnd, &mut wr);
+            let mut client_origin = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut client_origin);
+
+            let frame_left = client_origin.x - wr.left;
+            let frame_top = client_origin.y - wr.top;
+            if frame_left > 0 || frame_top > 0 {
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    wr.left - frame_left,
+                    wr.top - frame_top,
+                    0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+
+        info!("lock_window_position: locked {:?}", hwnd.0);
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -17,6 +97,15 @@ pub struct WindowInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureResult {
     pub id: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualScreenInfo {
+    pub id: u32,
+    pub origin_x: i32,
+    pub origin_y: i32,
     pub width: u32,
     pub height: u32,
 }
@@ -157,6 +246,112 @@ pub fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
 }
 
 #[tauri::command]
+pub fn capture_virtual_screen() -> Result<VirtualScreenInfo, String> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+            SM_YVIRTUALSCREEN,
+        };
+
+        let (x, y, width, height) = unsafe {
+            (
+                GetSystemMetrics(SM_XVIRTUALSCREEN),
+                GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            )
+        };
+
+        if width <= 0 || height <= 0 {
+            return Err("Failed to get virtual screen dimensions".to_string());
+        }
+
+        let bgra_data = gdi_capture(x, y, width, height)?;
+        let id = store_screenshot(bgra_data, width as u32, height as u32);
+
+        Ok(VirtualScreenInfo {
+            id,
+            origin_x: x,
+            origin_y: y,
+            width: width as u32,
+            height: height as u32,
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn crop_precapture(
+    precapture_id: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    origin_x: i32,
+    origin_y: i32,
+) -> Result<CaptureResult, String> {
+    if width <= 0 || height <= 0 {
+        return Err("Invalid crop dimensions".to_string());
+    }
+
+    let store = SCREENSHOT_STORE.read().unwrap();
+    let precapture = store
+        .get(&precapture_id)
+        .ok_or_else(|| format!("No precapture with id {}", precapture_id))?;
+
+    let src_w = precapture.width as i32;
+    let src_h = precapture.height as i32;
+
+    // Convert screen coordinates to buffer-relative
+    let buf_x = (x - origin_x).max(0);
+    let buf_y = (y - origin_y).max(0);
+
+    // Clamp to buffer bounds
+    let crop_w = width.min(src_w - buf_x).max(0);
+    let crop_h = height.min(src_h - buf_y).max(0);
+
+    if crop_w <= 0 || crop_h <= 0 {
+        return Err("Crop region is outside the precapture bounds".to_string());
+    }
+
+    let src_stride = (src_w * 4) as usize;
+    let dst_stride = (crop_w * 4) as usize;
+    let mut cropped = vec![0u8; (crop_w * crop_h * 4) as usize];
+
+    for row in 0..crop_h {
+        let src_offset = ((buf_y + row) as usize) * src_stride + (buf_x as usize) * 4;
+        let dst_offset = (row as usize) * dst_stride;
+        cropped[dst_offset..dst_offset + dst_stride]
+            .copy_from_slice(&precapture.data[src_offset..src_offset + dst_stride]);
+    }
+
+    // Data already has alpha fixed from store_screenshot, insert directly
+    let id = NEXT_SCREENSHOT_ID.fetch_add(1, Ordering::Relaxed);
+    drop(store);
+
+    let mut store = SCREENSHOT_STORE.write().unwrap();
+    store.insert(
+        id,
+        CapturedScreenshot {
+            data: cropped,
+            width: crop_w as u32,
+            height: crop_h as u32,
+        },
+    );
+
+    Ok(CaptureResult {
+        id,
+        width: crop_w as u32,
+        height: crop_h as u32,
+    })
+}
+
+#[tauri::command]
 pub fn get_windows() -> Result<Vec<WindowInfo>, String> {
     #[cfg(windows)]
     {
@@ -272,7 +467,7 @@ fn gdi_capture(x: i32, y: i32, width: i32, height: i32) -> Result<Vec<u8>, Strin
 }
 
 #[tauri::command]
-pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Result<CaptureResult, String> {
+pub fn capture_screen(monitor_index: usize) -> Result<CaptureResult, String> {
     #[cfg(windows)]
     {
         use windows::Win32::Foundation::{LPARAM, RECT};
@@ -319,39 +514,7 @@ pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Resu
         let width = info.monitorInfo.rcMonitor.right - x;
         let height = info.monitorInfo.rcMonitor.bottom - y;
 
-        // Temporarily hide the overlay window to exclude it from the capture
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::HWND;
-            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP};
-            if let Some(hwnd_val) = exclude_hwnd {
-                let hwnd = HWND(hwnd_val as *mut _);
-                unsafe {
-                    // Force the window to erase its content immediately before hiding
-                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
-                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
-                }
-            }
-        }
-
         let bgra_data = gdi_capture(x, y, width, height)?;
-
-        // Show the overlay window again
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::HWND;
-            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP, SWP_SHOWWINDOW};
-            if let Some(hwnd_val) = exclude_hwnd {
-                let hwnd = HWND(hwnd_val as *mut _);
-                unsafe {
-                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
-                }
-            }
-        }
-
         let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {
@@ -368,42 +531,10 @@ pub fn capture_screen(monitor_index: usize, exclude_hwnd: Option<isize>) -> Resu
 }
 
 #[tauri::command]
-pub fn capture_region(x: i32, y: i32, width: i32, height: i32, exclude_hwnd: Option<isize>) -> Result<CaptureResult, String> {
+pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<CaptureResult, String> {
     #[cfg(windows)]
     {
-        // Temporarily hide the overlay window to exclude it from the capture
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::HWND;
-            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP};
-            if let Some(hwnd_val) = exclude_hwnd {
-                let hwnd = HWND(hwnd_val as *mut _);
-                unsafe {
-                    // Force the window to erase its content immediately before hiding
-                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
-                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
-                }
-            }
-        }
-
         let bgra_data = gdi_capture(x, y, width, height)?;
-
-        // Show the overlay window again
-        #[cfg(windows)]
-        {
-            use windows::Win32::Foundation::HWND;
-            use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_ERASE, RDW_FRAME, RDW_INTERNALPAINT, RDW_UPDATENOW};
-            use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, HWND_TOP, SWP_SHOWWINDOW};
-            if let Some(hwnd_val) = exclude_hwnd {
-                let hwnd = HWND(hwnd_val as *mut _);
-                unsafe {
-                    let _ = SetWindowPos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                    let _ = RedrawWindow(Some(hwnd), None, None, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_UPDATENOW);
-                }
-            }
-        }
-
         let id = store_screenshot(bgra_data, width as u32, height as u32);
 
         Ok(CaptureResult {

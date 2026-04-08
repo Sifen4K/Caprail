@@ -39,6 +39,7 @@
       margin-bottom: 10px;
       cursor: pointer;
       overflow: hidden;
+      user-select: none;
     }
     #timeline-progress {
       position: absolute;
@@ -66,13 +67,15 @@
       z-index: 2;
     }
     #trim-start { left: 0; border-radius: 4px 0 0 4px; }
-    #trim-end { right: 0; border-radius: 0 4px 4px 0; }
+    #trim-end { left: 100%; border-radius: 0 4px 4px 0; transform: translateX(-100%); }
     .trim-region {
       position: absolute;
       top: 0;
       height: 100%;
       background: rgba(255, 152, 0, 0.1);
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: pointer;
+      z-index: 1;
     }
     #control-row {
       display: flex;

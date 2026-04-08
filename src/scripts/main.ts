@@ -152,6 +152,7 @@ async function openPinWindow(data: { id: number; width: number; height: number }
     center: true,
     decorations: false,
     transparent: true,
+    shadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -224,6 +225,36 @@ async function setup() {
       const { logicalX, logicalY, logicalWidth, logicalHeight } = event.payload;
       updateStatus("Starting recording...");
 
+      // Step 1: Close the record-overlay (red selection border) and wait
+      // for it to be fully destroyed before proceeding.  This avoids a
+      // race condition where the overlay is still on-screen when the
+      // first recording frames are captured.
+      const overlayWindow = await WebviewWindow.getByLabel("record-overlay");
+      if (overlayWindow) {
+        // Set up a promise that resolves when the window is destroyed,
+        // with a safety timeout so we never block forever.
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          const done = () => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          };
+
+          overlayWindow.once("tauri://destroyed", done);
+
+          // Safety timeout: if the destroyed event never arrives (e.g.
+          // the window was already gone or the reference is stale),
+          // continue after 2 seconds to avoid hanging.
+          setTimeout(done, 2000);
+
+          // Initiate the close — the promise above will wait for the
+          // actual destruction event.
+          overlayWindow.close();
+        });
+      }
+
       try {
         // Pre-create clip editor window (hidden) to warm up WebView2
         preCreatedClipEditor = new WebviewWindow("clip-editor", {
@@ -236,6 +267,10 @@ async function setup() {
           visible: false,
         });
         preCreatedClipEditor.once("tauri://destroyed", () => {
+          preCreatedClipEditor = null;
+        });
+        preCreatedClipEditor.once("tauri://error", (error) => {
+          console.error("Clip editor window creation failed:", error);
           preCreatedClipEditor = null;
         });
 
@@ -253,6 +288,7 @@ async function setup() {
           y: Math.round(logicalY),
           decorations: false,
           transparent: true,
+          shadow: false,
           alwaysOnTop: true,
           skipTaskbar: true,
           resizable: false,
@@ -306,6 +342,7 @@ async function setup() {
           y: Math.round(logicalY + logicalHeight + 10),
           decorations: false,
           transparent: true,
+          shadow: false,
           alwaysOnTop: true,
           skipTaskbar: true,
           resizable: false,
@@ -318,6 +355,20 @@ async function setup() {
       } catch (err) {
         updateStatus(`Recording error: ${err}`);
         isCapturing = false;
+
+        // Clean up indicator window
+        try {
+          const indicator = await WebviewWindow.getByLabel("record-indicator");
+          if (indicator) await indicator.close();
+        } catch {}
+
+        // Clean up pre-created clip editor window
+        if (preCreatedClipEditor) {
+          try {
+            await preCreatedClipEditor.close();
+            preCreatedClipEditor = null;
+          } catch {}
+        }
       }
     }
   );

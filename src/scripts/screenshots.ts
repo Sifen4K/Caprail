@@ -82,6 +82,7 @@ export async function createScreenCaptureWindow() {
     y: logicalMinY,
     transparent: true,
     decorations: false,
+    shadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,

@@ -31,6 +31,10 @@ let playbackSpeed = 1.0;
 let lastFrameTime = 0;
 let animFrameId = 0;
 
+// ── Unified drag state ────────────────────────────────────────────────
+type DragMode = null | "scrub" | "trim-start" | "trim-end";
+let dragMode: DragMode = null;
+
 // Frame cache for smooth playback
 const frameCache = new Map<number, ImageData>();
 const CACHE_AHEAD = 8;
@@ -155,7 +159,8 @@ async function fetchAndRender(frameIndex: number) {
   currentFrame = frameIndex;
 
   const imageData = await fetchFrame(frameIndex);
-  if (imageData) {
+  // Only render if this frame is still current (guard against stale requests)
+  if (imageData && currentFrame === frameIndex) {
     ctx.putImageData(imageData, 0, 0);
   }
 
@@ -173,6 +178,54 @@ function prefetchFrames(fromFrame: number) {
       fetchFrame(idx); // fire-and-forget
     }
   }
+}
+
+// ── Seek throttle ─────────────────────────────────────────────────────
+
+let pendingSeekFrame: number | null = null;
+let seekInProgress = false;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** Synchronously moves the playhead and updates UI; renders from cache if possible,
+ *  otherwise queues an async fetch. */
+function seekToFrame(frameIndex: number) {
+  frameIndex = clamp(frameIndex, 0, totalFrames - 1);
+  currentFrame = frameIndex;
+  updatePlayhead();
+  updateTimeDisplay();
+
+  // Try synchronous render from cache first
+  const cached = frameCache.get(frameIndex);
+  if (cached) {
+    ctx.putImageData(cached, 0, 0);
+    prefetchFrames(frameIndex);
+    return;
+  }
+
+  // Cache miss — queue async fetch, but only one in flight at a time
+  pendingSeekFrame = frameIndex;
+  if (!seekInProgress) {
+    processSeek();
+  }
+}
+
+async function processSeek() {
+  seekInProgress = true;
+  while (pendingSeekFrame !== null) {
+    const target = pendingSeekFrame;
+    pendingSeekFrame = null;
+
+    const imageData = await fetchFrame(target);
+    // Only paint if still current (guard against newer seeks)
+    if (imageData && currentFrame === target) {
+      ctx.putImageData(imageData, 0, 0);
+      prefetchFrames(target);
+    }
+  }
+  seekInProgress = false;
 }
 
 // ── Playback engine ───────────────────────────────────────────────────
@@ -213,7 +266,7 @@ function playbackLoop() {
       const nextFrame = currentFrame + framesToAdvance;
 
       if (nextFrame >= trimEndFrame) {
-        renderFrameSync(trimStartFrame) || fetchAndRender(trimStartFrame);
+        renderFrameSync(trimEndFrame - 1) || fetchAndRender(trimEndFrame - 1);
         stopPlayback();
         return;
       }
@@ -244,44 +297,88 @@ speedSelect.addEventListener("change", () => {
   playbackSpeed = parseFloat(speedSelect.value);
 });
 
-timeline.addEventListener("click", (e) => {
-  if ((e.target as HTMLElement).classList.contains("trim-handle")) return;
-  const rect = timeline.getBoundingClientRect();
-  const ratio = (e.clientX - rect.left) / rect.width;
-  const targetFrame = Math.round(ratio * (totalFrames - 1));
-  fetchAndRender(Math.max(0, Math.min(totalFrames - 1, targetFrame)));
-});
+timeline.addEventListener("mousedown", (e) => {
+  const target = e.target as HTMLElement;
+  // Ignore clicks that land on trim handles or the trim region (they have their own handlers)
+  if (target.classList.contains("trim-handle") || target.id === "trim-region") return;
 
-let draggingTrim: "start" | "end" | null = null;
+  e.preventDefault();
+  if (isPlaying) stopPlayback();
+
+  dragMode = "scrub";
+
+  const rect = timeline.getBoundingClientRect();
+  const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  const frameIndex = Math.round(ratio * (totalFrames - 1));
+  seekToFrame(frameIndex);
+});
 
 trimStartHandle.addEventListener("mousedown", (e) => {
   e.stopPropagation();
-  draggingTrim = "start";
+  e.preventDefault();
+  if (isPlaying) stopPlayback();
+  dragMode = "trim-start";
 });
 
 trimEndHandle.addEventListener("mousedown", (e) => {
   e.stopPropagation();
-  draggingTrim = "end";
+  e.preventDefault();
+  if (isPlaying) stopPlayback();
+  dragMode = "trim-end";
+});
+
+trimRegion.addEventListener("mousedown", (e) => {
+  e.stopPropagation();
+  e.preventDefault();
+  if (isPlaying) stopPlayback();
+
+  // Clicking/dragging on the trim region scrubs the playhead
+  dragMode = "scrub";
+
+  const rect = timeline.getBoundingClientRect();
+  const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  const frameIndex = Math.round(ratio * (totalFrames - 1));
+  seekToFrame(frameIndex);
 });
 
 document.addEventListener("mousemove", (e) => {
-  if (!draggingTrim) return;
+  if (!dragMode) return;
   const rect = timeline.getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  const frame = Math.round(ratio * (totalFrames - 1));
 
-  if (draggingTrim === "start") {
-    trimStartFrame = Math.min(frame, trimEndFrame - 1);
-  } else {
-    trimEndFrame = Math.max(frame, trimStartFrame + 1);
+  switch (dragMode) {
+    case "scrub": {
+      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const frameIndex = Math.round(ratio * (totalFrames - 1));
+      seekToFrame(frameIndex);
+      break;
+    }
+
+    case "trim-start": {
+      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const frame = Math.round(ratio * (totalFrames - 1));
+      trimStartFrame = Math.min(frame, trimEndFrame - 1);
+      currentFrame = trimStartFrame;
+      updateTrimUI();
+      seekToFrame(currentFrame);
+      break;
+    }
+
+    case "trim-end": {
+      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const frame = Math.round(ratio * (totalFrames - 1));
+      trimEndFrame = Math.max(frame, trimStartFrame + 1);
+      currentFrame = trimEndFrame;
+      updateTrimUI();
+      seekToFrame(currentFrame);
+      break;
+    }
   }
-
-  updateTrimUI();
-  updateTimeDisplay();
 });
 
-document.addEventListener("mouseup", () => {
-  draggingTrim = null;
+document.addEventListener("mouseup", (e) => {
+  if (e.button === 0) {
+    dragMode = null;
+  }
 });
 
 // ── UI updates ────────────────────────────────────────────────────────
@@ -298,7 +395,7 @@ function updateTrimUI() {
   const startRatio = trimStartFrame / (totalFrames - 1);
   const endRatio = trimEndFrame / (totalFrames - 1);
   trimStartHandle.style.left = `${startRatio * 100}%`;
-  trimEndHandle.style.left = `${endRatio * 100 - 1}%`;
+  trimEndHandle.style.left = `${endRatio * 100}%`;
   trimRegion.style.left = `${startRatio * 100}%`;
   trimRegion.style.width = `${(endRatio - startRatio) * 100}%`;
 }

@@ -38,6 +38,7 @@ export async function createRecordingCaptureWindow() {
     y: minY,
     transparent: true,
     decorations: false,
+    shadow: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,

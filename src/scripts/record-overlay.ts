@@ -145,12 +145,14 @@ canvas.addEventListener("mouseup", async () => {
       logicalWidth: logRect.w,
       logicalHeight: logRect.h,
     });
+    // Do not close here — main.ts will close this window and wait for
+    // its destruction before starting the recording, avoiding the race
+    // condition where the red overlay border appears in captured frames.
   } else {
     await emit("recording-cancelled", {});
+    const win = getCurrentWindow();
+    await win.close();
   }
-
-  const win = getCurrentWindow();
-  await win.close();
 });
 
 window.addEventListener("keydown", async (e) => {

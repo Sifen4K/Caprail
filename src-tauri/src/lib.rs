@@ -131,6 +131,7 @@ pub fn run() {
             capture::get_monitors,
             capture::read_screenshot,
             capture::cleanup_screenshot,
+            capture::set_window_exclude_from_capture,
             capture::save_pin_image,
             capture::read_pin_image,
             capture::cleanup_pin_image,

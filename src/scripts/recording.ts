@@ -9,17 +9,24 @@ export async function createRecordingCaptureWindow() {
     recordWindow = null;
   }
 
+  // availableMonitors() returns physical positions and physical sizes.
+  // WebviewWindow x/y/width/height expect LOGICAL coordinates.
+  // Convert physical → logical using each monitor's scaleFactor.
   const monitors = await availableMonitors();
   let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
   if (monitors.length > 0) {
     minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
     for (const m of monitors) {
-      const mx = m.position.x;
-      const my = m.position.y;
-      minX = Math.min(minX, mx);
-      minY = Math.min(minY, my);
-      maxX = Math.max(maxX, mx + m.size.width);
-      maxY = Math.max(maxY, my + m.size.height);
+      // m.position is PhysicalPosition, m.size is PhysicalSize
+      const sf = m.scaleFactor;
+      const logX = m.position.x / sf;
+      const logY = m.position.y / sf;
+      const logW = m.size.width / sf;
+      const logH = m.size.height / sf;
+      minX = Math.min(minX, logX);
+      minY = Math.min(minY, logY);
+      maxX = Math.max(maxX, logX + logW);
+      maxY = Math.max(maxY, logY + logH);
     }
   }
 

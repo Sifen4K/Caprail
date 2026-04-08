@@ -185,23 +185,25 @@ async function setup() {
     updateStatus("Ready");
   });
 
-  await listen("recording-cancelled", () => {
+  await listen("recording-cancelled", async () => {
     isCapturing = false;
     updateStatus("Ready");
   });
 
   // Listen for recording area selection
-  await listen<{ x: number; y: number; width: number; height: number }>(
+  await listen<{
+    x: number; y: number; width: number; height: number;
+    logicalX: number; logicalY: number; logicalWidth: number; logicalHeight: number;
+  }>(
     "recording-area-selected",
     async (event) => {
+      // Physical pixel coords for the recording backend
       const { x, y, width, height } = event.payload;
+      // Logical pixel coords for window positioning (Tauri window API uses logical coords)
+      const { logicalX, logicalY, logicalWidth, logicalHeight } = event.payload;
       updateStatus("Starting recording...");
 
       try {
-        await invoke("start_recording", {
-          config: { x, y, width, height, fps: 30 },
-        });
-
         // Pre-create clip editor window (hidden) to warm up WebView2
         preCreatedClipEditor = new WebviewWindow("clip-editor", {
           url: "src/clip-editor.html",
@@ -216,19 +218,88 @@ async function setup() {
           preCreatedClipEditor = null;
         });
 
-        // Open recording control bar
-        new WebviewWindow("record-control", {
+        // Create the record-indicator overlay window to show green border
+        // around the selected recording area. The window is excluded from
+        // screen capture via SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)
+        // with robust retry and verification logic in Rust.
+        // We MUST wait for the exclusion to complete before starting recording,
+        // otherwise the green border will appear in the captured video.
+        const indicatorWindow = new WebviewWindow("record-indicator", {
+          url: "src/record-indicator.html",
+          width: Math.round(logicalWidth),
+          height: Math.round(logicalHeight),
+          x: Math.round(logicalX),
+          y: Math.round(logicalY),
+          decorations: false,
+          transparent: true,
+          alwaysOnTop: true,
+          skipTaskbar: true,
+          resizable: false,
+          title: "Recording Indicator",
+        });
+
+        // Wait for indicator window to be created AND excluded from capture
+        // before starting recording, so the green border never appears in the video.
+        await new Promise<void>((resolve) => {
+          indicatorWindow.once("tauri://created", async () => {
+            // Small delay to ensure the window is fully initialized by the OS
+            await new Promise(r => setTimeout(r, 100));
+
+            const maxRetries = 5;
+            for (let i = 0; i < maxRetries; i++) {
+              try {
+                await invoke("set_window_exclude_from_capture", { label: "record-indicator" });
+                console.log(`Record indicator excluded from capture (attempt ${i + 1})`);
+                break;
+              } catch (e) {
+                console.warn(`Failed to exclude record indicator (attempt ${i + 1}/${maxRetries}):`, e);
+                if (i < maxRetries - 1) {
+                  await new Promise(r => setTimeout(r, 100 * (i + 1)));
+                } else {
+                  console.error("Failed to exclude record indicator from capture after all retries");
+                }
+              }
+            }
+            resolve();
+          });
+        });
+
+        // Now start recording — green indicator is already excluded from capture
+        await invoke("start_recording", {
+          config: { x, y, width, height, fps: 30 },
+        });
+
+        // Open recording control bar below the selected area
+        const controlWindow = new WebviewWindow("record-control", {
           url: "src/record-control.html",
           width: 220,
           height: 52,
-          x: Math.round(x + width / 2 - 110),
-          y: y + height + 10,
+          x: Math.round(logicalX + logicalWidth / 2 - 110),
+          y: Math.round(logicalY + logicalHeight + 10),
           decorations: false,
           transparent: true,
           alwaysOnTop: true,
           skipTaskbar: true,
           resizable: false,
           title: "Recording",
+        });
+        // Exclude control bar from screen capture with retry for robustness
+        controlWindow.once("tauri://created", async () => {
+          const excludeWithRetry = async (retries: number) => {
+            for (let i = 0; i < retries; i++) {
+              try {
+                await invoke("set_window_exclude_from_capture", { label: "record-control" });
+                return;
+              } catch (e) {
+                if (i < retries - 1) {
+                  await new Promise(r => setTimeout(r, 50));
+                } else {
+                  console.warn("Failed to exclude control bar from capture after retries:", e);
+                }
+              }
+            }
+          };
+          await excludeWithRetry(3);
         });
       } catch (err) {
         updateStatus(`Recording error: ${err}`);
@@ -238,7 +309,7 @@ async function setup() {
   );
 
   // Listen for recording stopped
-  await listen("recording-stopped", () => {
+  await listen("recording-stopped", async () => {
     updateStatus("Recording stopped, opening editor...");
     showClipEditor();
   });

@@ -6,22 +6,43 @@ const canvas = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
 let isSelecting = false;
+// Coordinates in logical pixels (CSS pixels, relative to overlay window)
 let startX = 0;
 let startY = 0;
 let currentX = 0;
 let currentY = 0;
+// Device pixel ratio for HiDPI support
+let dpr = 1;
+// Physical origin of the overlay window on the desktop (for absolute coordinate calc)
+let originPhysX = 0;
+let originPhysY = 0;
 
 async function resize() {
   const sz = await getCurrentWindow().innerSize();
+  // innerPosition() returns the physical position of the CLIENT AREA on the desktop.
+  // This is what JavaScript clientX/Y are relative to, so it must be used (not outerPosition,
+  // which includes the window frame and would introduce an offset).
+  const pos = await getCurrentWindow().innerPosition();
+  dpr = window.devicePixelRatio || 1;
+  // Store physical client-area origin so we can convert logical→absolute physical coords
+  originPhysX = pos.x;
+  originPhysY = pos.y;
+  // Set canvas physical pixel size to match window
   canvas.width = sz.width;
   canvas.height = sz.height;
+  // Scale context so all drawing uses logical (CSS) coordinates
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   draw();
 }
 
 function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Logical dimensions (physical / dpr)
+  const logicalW = canvas.width / dpr;
+  const logicalH = canvas.height / dpr;
+
+  ctx.clearRect(0, 0, logicalW, logicalH);
   ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, logicalW, logicalH);
 
   if (isSelecting) {
     const rect = {
@@ -36,7 +57,10 @@ function draw() {
       ctx.lineWidth = 2;
       ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-      const label = `${rect.w} x ${rect.h}`;
+      // Show physical pixel dimensions in label
+      const physW = Math.round(rect.w * dpr);
+      const physH = Math.round(rect.h * dpr);
+      const label = `${physW} x ${physH}`;
       ctx.font = "13px monospace";
       const metrics = ctx.measureText(label);
       const labelX = rect.x + rect.w / 2 - metrics.width / 2;
@@ -50,22 +74,22 @@ function draw() {
     ctx.font = "24px sans-serif";
     ctx.fillStyle = "#fff";
     ctx.textAlign = "center";
-    ctx.fillText(t("recordOverlay.selectArea"), canvas.width / 2, canvas.height / 2);
+    ctx.fillText(t("recordOverlay.selectArea"), logicalW / 2, logicalH / 2);
     ctx.font = "16px sans-serif";
     ctx.fillStyle = "#aaa";
-    ctx.fillText(t("recordOverlay.pressEscCancel"), canvas.width / 2, canvas.height / 2 + 30);
+    ctx.fillText(t("recordOverlay.pressEscCancel"), logicalW / 2, logicalH / 2 + 30);
     ctx.textAlign = "start";
   }
 
-  // Crosshair
+  // Crosshair (in logical coordinates)
   ctx.strokeStyle = "rgba(255,255,255,0.3)";
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(0, currentY);
-  ctx.lineTo(canvas.width, currentY);
+  ctx.lineTo(logicalW, currentY);
   ctx.moveTo(currentX, 0);
-  ctx.lineTo(currentX, canvas.height);
+  ctx.lineTo(currentX, logicalH);
   ctx.stroke();
   ctx.setLineDash([]);
 }
@@ -88,20 +112,38 @@ canvas.addEventListener("mouseup", async () => {
   if (!isSelecting) return;
   isSelecting = false;
 
-  const rect = {
+  // Logical rectangle relative to overlay window (CSS pixels)
+  const logRect = {
     x: Math.min(startX, currentX),
     y: Math.min(startY, currentY),
     w: Math.abs(currentX - startX),
     h: Math.abs(currentY - startY),
   };
 
-  if (rect.w > 10 && rect.h > 10) {
-    // Emit recording area selected
+  if (logRect.w > 10 && logRect.h > 10) {
+    // Convert to absolute physical screen pixels for the recording backend (GDI BitBlt)
+    // originPhysX/Y is the physical position of the overlay window on the desktop
+    const physX = Math.round(originPhysX + logRect.x * dpr);
+    const physY = Math.round(originPhysY + logRect.y * dpr);
+    const physW = Math.round(logRect.w * dpr);
+    const physH = Math.round(logRect.h * dpr);
+
+    // Logical screen-absolute coords for window positioning (Tauri window API uses logical coords)
+    // innerPosition() returns physical coords, convert back to logical
+    const logAbsX = originPhysX / dpr + logRect.x;
+    const logAbsY = originPhysY / dpr + logRect.y;
+
     await emit("recording-area-selected", {
-      x: rect.x,
-      y: rect.y,
-      width: rect.w,
-      height: rect.h,
+      // Physical coords for Rust recording backend
+      x: physX,
+      y: physY,
+      width: physW,
+      height: physH,
+      // Logical screen-absolute coords for window positioning
+      logicalX: logAbsX,
+      logicalY: logAbsY,
+      logicalWidth: logRect.w,
+      logicalHeight: logRect.h,
     });
   } else {
     await emit("recording-cancelled", {});

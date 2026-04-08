@@ -22,6 +22,7 @@ export default defineConfig({
         "screenshot-overlay": resolve(__dirname, "src/screenshot-overlay.html"),
         "record-overlay": resolve(__dirname, "src/record-overlay.html"),
         "record-control": resolve(__dirname, "src/record-control.html"),
+        "record-indicator": resolve(__dirname, "src/record-indicator.html"),
         "settings": resolve(__dirname, "src/settings.html"),
         "editor": resolve(__dirname, "src/editor.html"),
         "clip-editor": resolve(__dirname, "src/clip-editor.html"),

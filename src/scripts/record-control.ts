@@ -31,8 +31,10 @@ document.addEventListener("mousemove", async (e) => {
   dragStartY = e.screenY;
 
   const pos = await win.outerPosition();
+  const dpr = window.devicePixelRatio || 1;
   const { LogicalPosition } = await import("@tauri-apps/api/dpi");
-  await win.setPosition(new LogicalPosition(pos.x + dx, pos.y + dy));
+  // outerPosition() returns PhysicalPosition; convert to logical before adding logical delta
+  await win.setPosition(new LogicalPosition(pos.x / dpr + dx, pos.y / dpr + dy));
 });
 
 document.addEventListener("mouseup", () => {

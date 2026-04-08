@@ -584,6 +584,135 @@ pub fn capture_window(hwnd: usize) -> Result<CaptureResult, String> {
     }
 }
 
+/// Exclude a window from screen capture (GDI BitBlt, etc.) using
+/// SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE).
+/// Available on Windows 10 version 2004 and later.
+///
+/// This version includes robust handling for transparent/layered windows:
+/// 1. If the window has WS_EX_LAYERED, temporarily remove it before setting affinity
+/// 2. Verify with GetWindowDisplayAffinity that the setting actually took effect
+/// 3. Retry up to 5 times with increasing delays if verification fails
+#[tauri::command]
+pub fn set_window_exclude_from_capture(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowDisplayAffinity, GetWindowLongW, SetWindowDisplayAffinity, SetWindowLongW,
+            GWL_EXSTYLE, WINDOW_DISPLAY_AFFINITY, WS_EX_LAYERED,
+        };
+
+        let window = app
+            .get_webview_window(&label)
+            .ok_or_else(|| format!("Window '{}' not found", label))?;
+
+        let raw = window.hwnd().map_err(|e| e.to_string())?;
+        let hwnd = HWND(raw.0);
+
+        // WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        let wda_exclude = WINDOW_DISPLAY_AFFINITY(0x00000011);
+
+        unsafe {
+            // Check if window has WS_EX_LAYERED style
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            let is_layered = (ex_style & WS_EX_LAYERED.0 as i32) != 0;
+
+            if is_layered {
+                info!(
+                    "set_window_exclude_from_capture: '{}' has WS_EX_LAYERED, temporarily removing",
+                    label
+                );
+                // Remove WS_EX_LAYERED before setting display affinity
+                SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
+            }
+
+            // Retry loop: attempt to set and verify display affinity
+            let max_retries = 5;
+            let mut success = false;
+            for attempt in 0..max_retries {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(50 * attempt as u64));
+                }
+
+                match SetWindowDisplayAffinity(hwnd, wda_exclude) {
+                    Ok(_) => {
+                        // Verify the setting took effect
+                        let mut current_affinity: u32 = 0;
+                        if GetWindowDisplayAffinity(hwnd, &mut current_affinity).is_ok() {
+                            if current_affinity == wda_exclude.0 {
+                                info!(
+                                    "set_window_exclude_from_capture: verified '{}' (attempt {})",
+                                    label,
+                                    attempt + 1
+                                );
+                                success = true;
+                                break;
+                            } else {
+                                info!(
+                                    "set_window_exclude_from_capture: affinity mismatch for '{}' \
+                                     (got 0x{:x}, want 0x{:x}), retrying...",
+                                    label, current_affinity, wda_exclude.0
+                                );
+                            }
+                        } else {
+                            info!(
+                                "set_window_exclude_from_capture: GetWindowDisplayAffinity failed \
+                                 for '{}', assuming set succeeded",
+                                label
+                            );
+                            success = true;
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        info!(
+                            "set_window_exclude_from_capture: attempt {} failed for '{}': {}",
+                            attempt + 1,
+                            label,
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Restore WS_EX_LAYERED if we removed it
+            if is_layered {
+                // Re-read the current extended style (may have been modified)
+                let current_ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                SetWindowLongW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    current_ex_style | WS_EX_LAYERED.0 as i32,
+                );
+                info!(
+                    "set_window_exclude_from_capture: restored WS_EX_LAYERED for '{}'",
+                    label
+                );
+            }
+
+            if !success {
+                return Err(format!(
+                    "Failed to set WDA_EXCLUDEFROMCAPTURE for '{}' after {} retries",
+                    label, max_retries
+                ));
+            }
+        }
+
+        info!(
+            "set_window_exclude_from_capture: excluded '{}' ({:?})",
+            label, hwnd.0
+        );
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (app, label);
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn save_pin_image(data: Vec<u8>) -> Result<u32, String> {
     let id = NEXT_PIN_ID.fetch_add(1, Ordering::Relaxed);

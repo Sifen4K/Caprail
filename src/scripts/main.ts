@@ -14,6 +14,27 @@ function updateStatus(msg: string) {
   status.textContent = msg;
 }
 
+/**
+ * Exclude a window from screen capture using SetWindowDisplayAffinity.
+ * Retries up to `maxRetries` times with increasing delay on failure.
+ */
+async function excludeWindowFromCapture(label: string, maxRetries: number): Promise<void> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await invoke("set_window_exclude_from_capture", { label });
+      console.log(`Window '${label}' excluded from capture (attempt ${i + 1})`);
+      return;
+    } catch (e) {
+      console.warn(`Failed to exclude '${label}' (attempt ${i + 1}/${maxRetries}):`, e);
+      if (i < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 100 * (i + 1)));
+      } else {
+        console.error(`Failed to exclude '${label}' from capture after ${maxRetries} retries`);
+      }
+    }
+  }
+}
+
 // Convert "Ctrl+Shift+A" to "CommandOrControl+Shift+A" for Tauri
 function toTauriShortcut(shortcut: string): string {
   return shortcut.replace(/Ctrl/gi, "CommandOrControl");
@@ -241,26 +262,33 @@ async function setup() {
         // Wait for indicator window to be created AND excluded from capture
         // before starting recording, so the green border never appears in the video.
         await new Promise<void>((resolve) => {
+          let resolved = false;
+          const safeResolve = () => {
+            if (!resolved) {
+              resolved = true;
+              resolve();
+            }
+          };
+
+          // Safety timeout: if tauri://created never fires, resolve anyway
+          // so recording can still proceed (indicator may appear in capture briefly).
+          const timeout = setTimeout(() => {
+            console.warn("Indicator window creation timed out, proceeding with recording");
+            safeResolve();
+          }, 5000);
+
+          indicatorWindow.once("tauri://error", (e) => {
+            clearTimeout(timeout);
+            console.warn("Indicator window creation failed, proceeding with recording:", e);
+            safeResolve();
+          });
+
           indicatorWindow.once("tauri://created", async () => {
             // Small delay to ensure the window is fully initialized by the OS
             await new Promise(r => setTimeout(r, 100));
-
-            const maxRetries = 5;
-            for (let i = 0; i < maxRetries; i++) {
-              try {
-                await invoke("set_window_exclude_from_capture", { label: "record-indicator" });
-                console.log(`Record indicator excluded from capture (attempt ${i + 1})`);
-                break;
-              } catch (e) {
-                console.warn(`Failed to exclude record indicator (attempt ${i + 1}/${maxRetries}):`, e);
-                if (i < maxRetries - 1) {
-                  await new Promise(r => setTimeout(r, 100 * (i + 1)));
-                } else {
-                  console.error("Failed to exclude record indicator from capture after all retries");
-                }
-              }
-            }
-            resolve();
+            await excludeWindowFromCapture("record-indicator", 5);
+            clearTimeout(timeout);
+            safeResolve();
           });
         });
 
@@ -285,21 +313,7 @@ async function setup() {
         });
         // Exclude control bar from screen capture with retry for robustness
         controlWindow.once("tauri://created", async () => {
-          const excludeWithRetry = async (retries: number) => {
-            for (let i = 0; i < retries; i++) {
-              try {
-                await invoke("set_window_exclude_from_capture", { label: "record-control" });
-                return;
-              } catch (e) {
-                if (i < retries - 1) {
-                  await new Promise(r => setTimeout(r, 50));
-                } else {
-                  console.warn("Failed to exclude control bar from capture after retries:", e);
-                }
-              }
-            }
-          };
-          await excludeWithRetry(3);
+          await excludeWindowFromCapture("record-control", 3);
         });
       } catch (err) {
         updateStatus(`Recording error: ${err}`);

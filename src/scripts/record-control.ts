@@ -25,6 +25,8 @@ document.addEventListener("mousedown", (e) => {
 
 document.addEventListener("mousemove", async (e) => {
   if (!isDragging) return;
+  // screenX/screenY are in CSS (logical) pixels in Chromium-based WebView2,
+  // so dx/dy are logical deltas — no DPI scaling needed here.
   const dx = e.screenX - dragStartX;
   const dy = e.screenY - dragStartY;
   dragStartX = e.screenX;

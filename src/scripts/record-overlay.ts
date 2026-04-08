@@ -1,4 +1,5 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, availableMonitors } from "@tauri-apps/api/window";
+import type { Monitor } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { loadLocale, t } from "./i18n.ts";
 
@@ -16,6 +17,8 @@ let dpr = 1;
 // Physical origin of the overlay window on the desktop (for absolute coordinate calc)
 let originPhysX = 0;
 let originPhysY = 0;
+// List of all physical monitors (updated on resize)
+let monitors: Monitor[] = [];
 
 async function resize() {
   const sz = await getCurrentWindow().innerSize();
@@ -27,6 +30,8 @@ async function resize() {
   // Store physical client-area origin so we can convert logical→absolute physical coords
   originPhysX = pos.x;
   originPhysY = pos.y;
+  // Fetch all monitor geometries for per-monitor hint rendering
+  monitors = await availableMonitors();
   // Set canvas physical pixel size to match window
   canvas.width = sz.width;
   canvas.height = sz.height;
@@ -71,13 +76,36 @@ function draw() {
       ctx.fillText(label, labelX, labelY);
     }
   } else {
-    ctx.font = "24px sans-serif";
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.fillText(t("recordOverlay.selectArea"), logicalW / 2, logicalH / 2);
-    ctx.font = "16px sans-serif";
-    ctx.fillStyle = "#aaa";
-    ctx.fillText(t("recordOverlay.pressEscCancel"), logicalW / 2, logicalH / 2 + 30);
+    // Draw hint text at the center of each physical monitor.
+    // Monitor positions are in physical pixels; convert to logical coords
+    // relative to the overlay canvas by subtracting the window's physical origin
+    // and dividing by dpr.
+    const drawHintForMonitor = (cx: number, cy: number) => {
+      ctx.font = "24px sans-serif";
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.fillText(t("recordOverlay.selectArea"), cx, cy);
+      ctx.font = "16px sans-serif";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(t("recordOverlay.pressEscCancel"), cx, cy + 30);
+    };
+
+    if (monitors.length > 0) {
+      for (const mon of monitors) {
+        // Physical center of this monitor in desktop coordinates
+        const physCenterX = mon.position.x + mon.size.width / 2;
+        const physCenterY = mon.position.y + mon.size.height / 2;
+        // Convert to logical canvas coordinates:
+        // subtract the overlay window's physical origin, then divide by dpr
+        const logCX = (physCenterX - originPhysX) / dpr;
+        const logCY = (physCenterY - originPhysY) / dpr;
+        drawHintForMonitor(logCX, logCY);
+      }
+    } else {
+      // Fallback: render at the center of the entire canvas
+      drawHintForMonitor(logicalW / 2, logicalH / 2);
+    }
+
     ctx.textAlign = "start";
   }
 

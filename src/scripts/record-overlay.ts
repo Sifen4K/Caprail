@@ -1,6 +1,7 @@
 import { getCurrentWindow, availableMonitors } from "@tauri-apps/api/window";
 import type { Monitor } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { loadLocale, t } from "./i18n.ts";
 
 const canvas = document.getElementById("overlay") as HTMLCanvasElement;
@@ -21,6 +22,15 @@ let originPhysY = 0;
 let monitors: Monitor[] = [];
 
 async function resize() {
+  // Lock window position and compensate for any invisible frame offset.
+  // This shifts the window so the client area starts at the requested position,
+  // ensuring the overlay aligns exactly with the screen content.
+  try {
+    await invoke("lock_window_position", { label: "record-overlay" });
+  } catch (e) {
+    console.error("lock_window_position failed:", e);
+  }
+
   const sz = await getCurrentWindow().innerSize();
   // innerPosition() returns the physical position of the CLIENT AREA on the desktop.
   // This is what JavaScript clientX/Y are relative to, so it must be used (not outerPosition,

@@ -322,6 +322,13 @@ async function setup() {
           indicatorWindow.once("tauri://created", async () => {
             // Small delay to ensure the window is fully initialized by the OS
             await new Promise(r => setTimeout(r, 100));
+            // Compensate for any invisible frame offset so the green border
+            // aligns exactly with the recording region on screen
+            try {
+              await invoke("lock_window_position", { label: "record-indicator" });
+            } catch (e) {
+              console.warn("Failed to lock indicator window position:", e);
+            }
             await excludeWindowFromCapture("record-indicator", 5);
             clearTimeout(timeout);
             safeResolve();

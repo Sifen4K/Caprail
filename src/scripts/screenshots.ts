@@ -48,18 +48,25 @@ export async function createScreenCaptureWindow() {
   }
   console.log("Physical bounding rect:", minX, minY, maxX, maxY);
 
-  // Get logical monitor info from Tauri API for window sizing
+  // Get monitor info from Tauri API and convert to logical coordinates for window sizing.
+  // availableMonitors() returns PhysicalPosition and PhysicalSize; we must convert
+  // to logical coords using each monitor's scaleFactor because WebviewWindow x/y/width/height
+  // expect logical coordinates.
   const monitors = await availableMonitors();
   let logicalMinX = 0, logicalMinY = 0, logicalMaxX = 1920, logicalMaxY = 1080;
   if (monitors.length > 0) {
     logicalMinX = Infinity; logicalMinY = Infinity; logicalMaxX = -Infinity; logicalMaxY = -Infinity;
     for (const m of monitors) {
-      const mx = m.position.x;
-      const my = m.position.y;
-      logicalMinX = Math.min(logicalMinX, mx);
-      logicalMinY = Math.min(logicalMinY, my);
-      logicalMaxX = Math.max(logicalMaxX, mx + m.size.width);
-      logicalMaxY = Math.max(logicalMaxY, my + m.size.height);
+      // m.position and m.size are in physical pixels; convert to logical
+      const sf = m.scaleFactor;
+      const logX = m.position.x / sf;
+      const logY = m.position.y / sf;
+      const logW = m.size.width / sf;
+      const logH = m.size.height / sf;
+      logicalMinX = Math.min(logicalMinX, logX);
+      logicalMinY = Math.min(logicalMinY, logY);
+      logicalMaxX = Math.max(logicalMaxX, logX + logW);
+      logicalMaxY = Math.max(logicalMaxY, logY + logH);
     }
   }
   console.log("Logical bounding rect:", logicalMinX, logicalMinY, logicalMaxX, logicalMaxY);

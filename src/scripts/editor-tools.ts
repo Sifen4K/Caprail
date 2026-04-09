@@ -51,7 +51,7 @@ export function drawAnnotation(state: EditorState, ann: Annotation) {
 
     case "text":
       if (ann.text && ann.x != null && ann.y != null) {
-        ctx.font = `${ann.fontSize || 16}px sans-serif`;
+        ctx.font = `${ann.fontSize || 16 * dpiScale}px sans-serif`;
         ctx.fillText(ann.text, ann.x, ann.y);
       }
       break;
@@ -107,8 +107,10 @@ function drawArrow(
 
 function applyMosaic(state: EditorState, x: number, y: number, w: number, h: number) {
   if (!state.baseCanvas) return;
-  const { ctx } = state;
-  const blockSize = 10;
+  const { ctx, dpiScale } = state;
+  // Scale block size with DPI so mosaic blocks appear the same visual size
+  // regardless of display scaling
+  const blockSize = Math.round(10 * dpiScale);
   const sx = Math.max(0, Math.round(x));
   const sy = Math.max(0, Math.round(y));
   const ex = Math.min(state.baseCanvas.width, Math.round(x + w));
@@ -135,7 +137,9 @@ function applyMosaic(state: EditorState, x: number, y: number, w: number, h: num
 
 function applyBlur(state: EditorState, x: number, y: number, w: number, h: number) {
   if (!state.baseImageData) return;
-  const { ctx, canvas } = state;
+  const { ctx, canvas, dpiScale } = state;
+  // Scale blur radius with DPI for consistent visual effect across display densities
+  const blurRadius = Math.round(8 * dpiScale);
   const sx = Math.max(0, Math.round(x));
   const sy = Math.max(0, Math.round(y));
   const sw = Math.min(Math.round(w), state.baseImageData.width - sx);
@@ -143,7 +147,7 @@ function applyBlur(state: EditorState, x: number, y: number, w: number, h: numbe
   if (sw <= 0 || sh <= 0) return;
 
   ctx.save();
-  ctx.filter = "blur(8px)";
+  ctx.filter = `blur(${blurRadius}px)`;
   ctx.drawImage(canvas, sx, sy, sw, sh, sx, sy, sw, sh);
   ctx.restore();
 }

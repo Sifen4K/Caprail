@@ -11,7 +11,14 @@ export async function createRecordingCaptureWindow() {
 
   // availableMonitors() returns physical positions and physical sizes.
   // WebviewWindow x/y/width/height expect LOGICAL coordinates.
-  // Convert physical → logical using each monitor's scaleFactor.
+  // Convert physical -> logical using each monitor's scaleFactor.
+  //
+  // Note: On mixed-DPI multi-monitor setups, Windows' logical coordinate
+  // system is per-monitor (each monitor's coords are scaled by its own DPI).
+  // This means dividing each monitor's physical position by its own scaleFactor
+  // gives the correct logical position that Tauri/Windows APIs expect.
+  // However, a single window spanning monitors with different DPIs will only
+  // get one DPI from the OS, which may cause imperfect coverage at the boundary.
   const monitors = await availableMonitors();
   let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
   if (monitors.length > 0) {

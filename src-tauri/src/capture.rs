@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
 use tauri::ipc::Response;
 use tracing::info;
 
-/// Original window procedure, stored for call-forwarding.
-static ORIG_OVERLAY_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+/// Per-window original window procedures, stored for call-forwarding.
+/// Key is the HWND as isize, value is the original WNDPROC.
+#[cfg(windows)]
+static ORIG_WNDPROCS: once_cell::sync::Lazy<std::sync::Mutex<HashMap<isize, isize>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Replacement window procedure: returns HTCLIENT for WM_NCHITTEST and blocks SC_MOVE.
 #[cfg(windows)]
@@ -26,7 +29,13 @@ unsafe extern "system" fn overlay_wndproc(
         return LRESULT(0);
     }
 
-    let orig = ORIG_OVERLAY_WNDPROC.load(Ordering::Relaxed);
+    // Look up the original WndProc for this specific window
+    let orig = ORIG_WNDPROCS
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&(hwnd.0 as isize)).copied())
+        .unwrap_or(0);
+
     if orig != 0 {
         let proc: WNDPROC = std::mem::transmute(orig);
         CallWindowProcW(proc, hwnd, msg, wparam, lparam)
@@ -54,7 +63,9 @@ pub fn lock_window_position(app: tauri::AppHandle, label: String) -> Result<(), 
         unsafe {
             // Subclass the window procedure to block drag/resize
             let old = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as isize);
-            ORIG_OVERLAY_WNDPROC.store(old, Ordering::Relaxed);
+            if let Ok(mut map) = ORIG_WNDPROCS.lock() {
+                map.insert(hwnd.0 as isize, old);
+            }
 
             // Shift the window so the client area starts at the original window position.
             // The non-client frame (WS_CAPTION border) pushes the client area inward;

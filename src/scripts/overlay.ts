@@ -65,6 +65,11 @@ async function init() {
   // Get DPI scaling factor
   dpiScale = window.devicePixelRatio;
 
+  // Scale context so all drawing uses logical (CSS) coordinates.
+  // The canvas bitmap is set to physical pixel dimensions; the transform
+  // maps logical drawing calls to physical canvas pixels.
+  ctx.setTransform(dpiScale, 0, 0, dpiScale, 0, 0);
+
   // Load monitor info for coordinate mapping
   try {
     monitorList = await invoke<MonitorInfo[]>("get_monitors");
@@ -134,10 +139,15 @@ function findWindowAt(x: number, y: number): WindowInfo | null {
   return best;
 }
 
-// Draw a region from the pre-captured image onto the main canvas (replaces clearRect)
+// Draw a region from the pre-captured image onto the main canvas (replaces clearRect).
+// x, y, w, h are in logical coordinates (CSS pixels). The source image is in physical
+// pixels, so we scale the source rect. The canvas context has a dpiScale transform,
+// so the destination rect is in logical coordinates.
 function drawBackground(x: number, y: number, w: number, h: number) {
   if (!bgCanvas) return;
-  // Convert overlay logical coords to pre-capture physical pixel coords
+  // Convert overlay logical coords to pre-capture physical pixel coords.
+  // The pre-capture origin may differ from the monitor origin, but for a
+  // full virtual-screen capture both are typically (monitorOriginX, monitorOriginY).
   const srcX = x * dpiScale;
   const srcY = y * dpiScale;
   const srcW = w * dpiScale;
@@ -146,14 +156,18 @@ function drawBackground(x: number, y: number, w: number, h: number) {
 }
 
 function draw() {
-  // Draw the full pre-captured image as background
+  // Logical dimensions (physical canvas size / dpiScale)
+  const logicalW = canvas.width / dpiScale;
+  const logicalH = canvas.height / dpiScale;
+
+  // Draw the full pre-captured image as background (logical coords)
   if (bgCanvas) {
-    ctx.drawImage(bgCanvas, 0, 0, bgCanvas.width, bgCanvas.height, 0, 0, canvas.width / dpiScale, canvas.height / dpiScale);
+    ctx.drawImage(bgCanvas, 0, 0, bgCanvas.width, bgCanvas.height, 0, 0, logicalW, logicalH);
   }
 
   // Semi-transparent dark overlay
   ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, logicalW, logicalH);
 
   if (isSelecting) {
     // Show selection rectangle
@@ -171,8 +185,10 @@ function draw() {
       ctx.lineWidth = 2;
       ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-      // Size label
-      const label = `${rect.w} x ${rect.h}`;
+      // Size label (show physical pixel dimensions)
+      const physW = Math.round(rect.w * dpiScale);
+      const physH = Math.round(rect.h * dpiScale);
+      const label = `${physW} x ${physH}`;
       ctx.font = "13px monospace";
       const metrics = ctx.measureText(label);
       const labelX = rect.x + rect.w / 2 - metrics.width / 2;
@@ -210,16 +226,16 @@ function draw() {
     ctx.fillText(label, labelX, labelY, logicalWidth - 8);
   }
 
-  // Crosshair - only draw when not selecting
+  // Crosshair - only draw when not selecting (in logical coordinates)
   if (!isSelecting) {
     ctx.strokeStyle = "rgba(255,255,255,0.5)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(0, currentY);
-    ctx.lineTo(canvas.width, currentY);
+    ctx.lineTo(logicalW, currentY);
     ctx.moveTo(currentX, 0);
-    ctx.lineTo(currentX, canvas.height);
+    ctx.lineTo(currentX, logicalH);
     ctx.stroke();
     ctx.setLineDash([]);
   }

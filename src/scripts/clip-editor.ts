@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
+import {
+  buildInitialClipEditorState,
+  createClipEditorSession,
+  getPlaybackTerminalFrame,
+  prepareExportRequest,
+} from "./clip-editor.logic";
 
 const canvas = document.getElementById("player-canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -59,8 +65,10 @@ async function loadRecording() {
     videoHeight = info.height;
     fps = info.fps;
     totalFrames = info.frameCount;
-    duration = totalFrames / fps;
-    trimEndFrame = totalFrames - 1;
+    const clipState = buildInitialClipEditorState(totalFrames, fps);
+    duration = clipState.duration;
+    trimStartFrame = clipState.trimStartFrame;
+    trimEndFrame = clipState.trimEndFrame;
 
     canvas.width = videoWidth;
     canvas.height = videoHeight;
@@ -266,7 +274,8 @@ function playbackLoop() {
       const nextFrame = currentFrame + framesToAdvance;
 
       if (nextFrame >= trimEndFrame) {
-        renderFrameSync(trimEndFrame - 1) || fetchAndRender(trimEndFrame - 1);
+        const terminalFrame = getPlaybackTerminalFrame(trimEndFrame);
+        renderFrameSync(terminalFrame) || fetchAndRender(terminalFrame);
         stopPlayback();
         return;
       }
@@ -462,16 +471,12 @@ async function doExport(format: "mp4" | "gif") {
   );
 
   try {
+    const session = createClipEditorSession(totalFrames, fps);
+    session.selection.startFrame = trimStartFrame;
+    session.selection.endFrame = trimEndFrame;
+    const config = prepareExportRequest(session, outputPath, playbackSpeed, format);
     await invoke("export_video", {
-      config: {
-        outputPath,
-        startFrame: trimStartFrame,
-        endFrame: trimEndFrame,
-        speed: playbackSpeed,
-        format,
-        gifFps: format === "gif" ? 15 : null,
-        gifMaxWidth: format === "gif" ? 640 : null,
-      },
+      config,
     });
   } catch (err) {
     console.error("Export invocation failed:", err);

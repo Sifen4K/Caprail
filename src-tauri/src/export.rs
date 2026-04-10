@@ -75,9 +75,13 @@ fn read_recording_meta() -> Result<(u32, u32, u32, usize), String> {
     Ok((rec.width, rec.height, rec.fps, rec.frames.len()))
 }
 
+fn selected_frame_count(config: &ExportConfig) -> u64 {
+    (config.end_frame - config.start_frame) as u64
+}
+
 fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
     let (width, height, fps, _total) = read_recording_meta()?;
-    let total_frames = (config.end_frame - config.start_frame) as u64;
+    let total_frames = selected_frame_count(config);
 
     let mut vf_filters: Vec<String> = Vec::new();
     if (config.speed - 1.0).abs() > 0.01 {
@@ -110,7 +114,7 @@ fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
 
 fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
     let (width, height, fps, _total) = read_recording_meta()?;
-    let total_frames = (config.end_frame - config.start_frame) as u64;
+    let total_frames = selected_frame_count(config);
     let gif_fps = config.gif_fps.unwrap_or(15);
     let max_width = config.gif_max_width.unwrap_or(640);
 
@@ -155,6 +159,37 @@ fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
 
     let _ = std::fs::remove_file(&palette_path);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{selected_frame_count, ExportConfig};
+
+    fn make_config(start_frame: u32, end_frame: u32) -> ExportConfig {
+        ExportConfig {
+            output_path: "out.mp4".to_string(),
+            start_frame,
+            end_frame,
+            speed: 1.0,
+            format: "mp4".to_string(),
+            gif_fps: None,
+            gif_max_width: None,
+        }
+    }
+
+    #[test]
+    fn full_selection_should_count_the_last_frame() {
+        let config = make_config(0, 9);
+
+        assert_eq!(selected_frame_count(&config), 10);
+    }
+
+    #[test]
+    fn single_frame_selection_should_export_one_frame() {
+        let config = make_config(0, 0);
+
+        assert_eq!(selected_frame_count(&config), 1);
+    }
 }
 
 fn pipe_frames_to_ffmpeg(

@@ -3,6 +3,7 @@ import type { Monitor } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { loadLocale, t } from "./i18n.ts";
+import { logicalRectToRecordingSelection } from "./coordinate-mapping";
 
 const canvas = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -159,29 +160,16 @@ canvas.addEventListener("mouseup", async () => {
   };
 
   if (logRect.w > 10 && logRect.h > 10) {
-    // Convert to absolute physical screen pixels for the recording backend (GDI BitBlt)
-    // originPhysX/Y is the physical position of the overlay window on the desktop
-    const physX = Math.round(originPhysX + logRect.x * dpr);
-    const physY = Math.round(originPhysY + logRect.y * dpr);
-    const physW = Math.round(logRect.w * dpr);
-    const physH = Math.round(logRect.h * dpr);
-
-    // Logical screen-absolute coords for window positioning (Tauri window API uses logical coords)
-    // innerPosition() returns physical coords, convert back to logical
-    const logAbsX = originPhysX / dpr + logRect.x;
-    const logAbsY = originPhysY / dpr + logRect.y;
+    const selection = logicalRectToRecordingSelection(
+      logRect,
+      originPhysX,
+      originPhysY,
+      dpr,
+      monitors
+    );
 
     await emit("recording-area-selected", {
-      // Physical coords for Rust recording backend
-      x: physX,
-      y: physY,
-      width: physW,
-      height: physH,
-      // Logical screen-absolute coords for window positioning
-      logicalX: logAbsX,
-      logicalY: logAbsY,
-      logicalWidth: logRect.w,
-      logicalHeight: logRect.h,
+      ...selection,
     });
     // Do not close here — main.ts will close this window and wait for
     // its destruction before starting the recording, avoiding the race

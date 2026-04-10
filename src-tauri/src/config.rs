@@ -161,3 +161,58 @@ fn set_auto_start(enabled: bool) -> Result<(), String> {
 fn set_auto_start(_enabled: bool) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_defaults, AppConfig};
+
+    #[test]
+    fn apply_defaults_preserves_existing_localized_fields() {
+        let mut config = AppConfig {
+            screenshot_shortcut: "Ctrl+Shift+A".to_string(),
+            record_shortcut: "Ctrl+Shift+R".to_string(),
+            save_path: String::new(),
+            default_image_format: "png".to_string(),
+            auto_start: false,
+            language: "zh".to_string(),
+            tray_menu_screenshot: "截图".to_string(),
+            tray_menu_record: "录屏".to_string(),
+            tray_menu_settings: "设置".to_string(),
+            tray_menu_quit: "退出".to_string(),
+        };
+
+        let changed = apply_defaults(&mut config);
+
+        assert!(changed);
+        assert!(!config.save_path.is_empty());
+        assert_eq!(config.language, "zh");
+        assert_eq!(config.tray_menu_screenshot, "截图");
+        assert_eq!(config.tray_menu_record, "录屏");
+        assert_eq!(config.tray_menu_settings, "设置");
+        assert_eq!(config.tray_menu_quit, "退出");
+    }
+
+    #[test]
+    fn deserialize_round_trip_keeps_localized_config_fields() {
+        let json = r#"{
+            "screenshot_shortcut": "Ctrl+Shift+A",
+            "record_shortcut": "Ctrl+Shift+R",
+            "save_path": "D:/Captures",
+            "default_image_format": "png",
+            "auto_start": false,
+            "language": "zh",
+            "tray_menu_screenshot": "截图",
+            "tray_menu_record": "录屏",
+            "tray_menu_settings": "设置",
+            "tray_menu_quit": "退出"
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).expect("config should deserialize");
+
+        assert_eq!(config.language, "zh");
+        assert_eq!(config.tray_menu_screenshot, "截图");
+        assert_eq!(config.tray_menu_record, "录屏");
+        assert_eq!(config.tray_menu_settings, "设置");
+        assert_eq!(config.tray_menu_quit, "退出");
+    }
+}

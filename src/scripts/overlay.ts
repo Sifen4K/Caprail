@@ -1,6 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import {
+  findWindowAtLogicalPoint,
+  overlayLogicalToPhysical as mapOverlayLogicalToPhysical,
+  physicalToOverlayLogical as mapPhysicalToOverlayLogical,
+} from "./coordinate-mapping";
 
 interface WindowInfo {
   title: string;
@@ -110,33 +115,26 @@ async function init() {
 
 // Convert physical pixel coordinates to overlay window relative logical coordinates
 function physicalToOverlayLogical(physicalX: number, physicalY: number): { x: number; y: number } {
-  const overlayPhysicalX = physicalX - monitorOriginX;
-  const overlayPhysicalY = physicalY - monitorOriginY;
-  return {
-    x: overlayPhysicalX / dpiScale,
-    y: overlayPhysicalY / dpiScale
-  };
+  return mapPhysicalToOverlayLogical(
+    physicalX,
+    physicalY,
+    monitorOriginX,
+    monitorOriginY,
+    dpiScale,
+    monitorList
+  );
 }
 
 function findWindowAt(x: number, y: number): WindowInfo | null {
-  // x, y are logical coordinates in overlay window
-  // Convert to physical screen coordinates to match windowList coordinates
-  const physicalX = monitorOriginX + x * dpiScale;
-  const physicalY = monitorOriginY + y * dpiScale;
-
-  // Find smallest window containing the point (most specific match)
-  let best: WindowInfo | null = null;
-  let bestArea = Infinity;
-  for (const w of windowList) {
-    if (physicalX >= w.x && physicalX < w.x + w.width && physicalY >= w.y && physicalY < w.y + w.height) {
-      const area = w.width * w.height;
-      if (area < bestArea) {
-        bestArea = area;
-        best = w;
-      }
-    }
-  }
-  return best;
+  return findWindowAtLogicalPoint(
+    x,
+    y,
+    windowList,
+    monitorOriginX,
+    monitorOriginY,
+    dpiScale,
+    monitorList
+  );
 }
 
 // Draw a region from the pre-captured image onto the main canvas (replaces clearRect).
@@ -284,8 +282,14 @@ canvas.addEventListener("mouseup", async () => {
     const logicalX = Math.min(startX, currentX);
     const logicalY = Math.min(startY, currentY);
     // Convert to physical screen coordinates
-    const physicalX = monitorOriginX + logicalX * dpiScale;
-    const physicalY = monitorOriginY + logicalY * dpiScale;
+    const { x: physicalX, y: physicalY } = mapOverlayLogicalToPhysical(
+      logicalX,
+      logicalY,
+      monitorOriginX,
+      monitorOriginY,
+      dpiScale,
+      monitorList
+    );
     const physicalW = dragW * dpiScale;
     const physicalH = dragH * dpiScale;
 

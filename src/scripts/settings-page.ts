@@ -1,21 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { loadLocale } from "./i18n.ts";
+import {
+  prepareSettingsSave,
+  type AppConfig,
+} from "./settings-page.logic.ts";
 
 loadLocale("en");
-
-interface AppConfig {
-  screenshot_shortcut: string;
-  record_shortcut: string;
-  save_path: string;
-  default_image_format: string;
-  auto_start: boolean;
-  language: string;
-  tray_menu_screenshot: string;
-  tray_menu_record: string;
-  tray_menu_settings: string;
-  tray_menu_quit: string;
-}
 
 const screenshotInput = document.getElementById("screenshot-shortcut") as HTMLInputElement;
 const recordInput = document.getElementById("record-shortcut") as HTMLInputElement;
@@ -23,9 +14,11 @@ const recordInput = document.getElementById("record-shortcut") as HTMLInputEleme
 // Store original shortcuts to detect changes
 let originalScreenshotShortcut = "";
 let originalRecordShortcut = "";
+let loadedConfig: AppConfig | null = null;
 
 // Load config
 invoke<AppConfig>("load_config").then((config) => {
+  loadedConfig = config;
   originalScreenshotShortcut = config.screenshot_shortcut;
   originalRecordShortcut = config.record_shortcut;
   screenshotInput.value = config.screenshot_shortcut;
@@ -71,18 +64,27 @@ setupShortcutCapture(recordInput);
 
 // Save button
 document.getElementById("save")!.onclick = async () => {
-  const config: AppConfig = {
-    screenshot_shortcut: screenshotInput.value,
-    record_shortcut: recordInput.value,
-    save_path: (document.getElementById("save-path") as HTMLInputElement).value,
-    default_image_format: (document.getElementById("default-format") as HTMLSelectElement).value,
-    auto_start: (document.getElementById("auto-start") as HTMLInputElement).checked,
+  const existingConfig = loadedConfig ?? {
+    screenshot_shortcut: originalScreenshotShortcut,
+    record_shortcut: originalRecordShortcut,
+    save_path: "",
+    default_image_format: "png",
+    auto_start: false,
+    language: "en",
     tray_menu_screenshot: "Screenshot",
     tray_menu_record: "Record",
     tray_menu_settings: "Settings",
     tray_menu_quit: "Quit",
-    language: "en",
   };
+
+  const saveResult = prepareSettingsSave(existingConfig, {
+    screenshotShortcut: screenshotInput.value,
+    recordShortcut: recordInput.value,
+    savePath: (document.getElementById("save-path") as HTMLInputElement).value,
+    defaultImageFormat: (document.getElementById("default-format") as HTMLSelectElement).value,
+    autoStart: (document.getElementById("auto-start") as HTMLInputElement).checked,
+  });
+  const { config } = saveResult;
 
   // Validate shortcuts
   if (!config.screenshot_shortcut || !config.record_shortcut) {
@@ -116,20 +118,11 @@ document.getElementById("save")!.onclick = async () => {
   }
 
   // Check if shortcuts changed
-  const shortcutsChanged =
-    config.screenshot_shortcut !== originalScreenshotShortcut ||
-    config.record_shortcut !== originalRecordShortcut;
-
   await invoke("save_config", { config });
 
   // Notify main window to re-register shortcuts if they changed
-  if (shortcutsChanged) {
-    await emit("shortcuts-changed", {
-      oldScreenshot: originalScreenshotShortcut,
-      oldRecord: originalRecordShortcut,
-      newScreenshot: config.screenshot_shortcut,
-      newRecord: config.record_shortcut,
-    });
+  if (saveResult.shortcutsChanged && saveResult.shortcutChangePayload) {
+    await emit("shortcuts-changed", saveResult.shortcutChangePayload);
   }
 
   window.close();

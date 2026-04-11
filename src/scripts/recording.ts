@@ -1,5 +1,5 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { availableMonitors } from "@tauri-apps/api/window";
+import { PhysicalPosition, PhysicalSize, availableMonitors } from "@tauri-apps/api/window";
 
 let recordWindow: WebviewWindow | null = null;
 
@@ -9,40 +9,34 @@ export async function createRecordingCaptureWindow() {
     recordWindow = null;
   }
 
-  // availableMonitors() returns physical positions and physical sizes.
-  // WebviewWindow x/y/width/height expect LOGICAL coordinates.
-  // Convert physical -> logical using each monitor's scaleFactor.
-  //
-  // Note: On mixed-DPI multi-monitor setups, Windows' logical coordinate
-  // system is per-monitor (each monitor's coords are scaled by its own DPI).
-  // This means dividing each monitor's physical position by its own scaleFactor
-  // gives the correct logical position that Tauri/Windows APIs expect.
-  // However, a single window spanning monitors with different DPIs will only
-  // get one DPI from the OS, which may cause imperfect coverage at the boundary.
+  // Compute the virtual screen bounds in PHYSICAL pixels.
+  // Using physical coords ensures the overlay covers the exact screen area
+  // regardless of per-monitor DPI scaling, avoiding coordinate mismatches
+  // that occur when logical coords are computed with mixed scale factors.
   const monitors = await availableMonitors();
   let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
   if (monitors.length > 0) {
     minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
     for (const m of monitors) {
-      // m.position is PhysicalPosition, m.size is PhysicalSize
-      const sf = m.scaleFactor;
-      const logX = m.position.x / sf;
-      const logY = m.position.y / sf;
-      const logW = m.size.width / sf;
-      const logH = m.size.height / sf;
-      minX = Math.min(minX, logX);
-      minY = Math.min(minY, logY);
-      maxX = Math.max(maxX, logX + logW);
-      maxY = Math.max(maxY, logY + logH);
+      // m.position and m.size are in physical pixels (desktop coordinates)
+      minX = Math.min(minX, m.position.x);
+      minY = Math.min(minY, m.position.y);
+      maxX = Math.max(maxX, m.position.x + m.size.width);
+      maxY = Math.max(maxY, m.position.y + m.size.height);
     }
   }
 
+  const physWidth = maxX - minX;
+  const physHeight = maxY - minY;
+
+  // Create window with minimal initial size - we'll set the actual size and position
+  // using PhysicalSize and PhysicalPosition after creation to ensure physical coords.
   recordWindow = new WebviewWindow("record-overlay", {
     url: "src/record-overlay.html",
-    width: maxX - minX,
-    height: maxY - minY,
-    x: minX,
-    y: minY,
+    width: 100,
+    height: 100,
+    x: 0,
+    y: 0,
     transparent: true,
     decorations: false,
     shadow: false,
@@ -52,7 +46,14 @@ export async function createRecordingCaptureWindow() {
     focus: true,
   });
 
-  recordWindow.once("tauri://created", () => {
+  recordWindow.once("tauri://created", async () => {
+    // Set window to cover the full virtual screen in physical coordinates
+    try {
+      await recordWindow!.setSize(new PhysicalSize(physWidth, physHeight));
+      await recordWindow!.setPosition(new PhysicalPosition(minX, minY));
+    } catch (e) {
+      console.error("Failed to set overlay size/position:", e);
+    }
     console.log("Record overlay window created");
   });
 

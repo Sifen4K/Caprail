@@ -7,6 +7,7 @@ import {
   createClipEditorSession,
   getPlaybackTerminalFrame,
   prepareExportRequest,
+  resolvePlaybackStartFrame,
   resolvePlayheadLeft,
   resolveTrimLayout,
   timelineOffsetToFrame,
@@ -40,9 +41,11 @@ let currentFrame = 0;
 let trimStartFrame = 0;
 let trimEndFrame = 0;
 let isPlaying = false;
+let isStartingPlayback = false;
 let playbackSpeed = 1.0;
 let lastFrameTime = 0;
 let animFrameId = 0;
+let pendingPlaybackFrame: number | null = null;
 
 // ── Unified drag state ────────────────────────────────────────────────
 type DragMode = null | "scrub" | "trim-start" | "trim-end";
@@ -54,7 +57,7 @@ const CACHE_AHEAD = 8;
 const MAX_CACHE_SIZE = 30;
 
 // In-flight fetch tracking
-const pendingFetches = new Set<number>();
+const pendingFetches = new Map<number, Promise<ImageData | null>>();
 const MAX_INFLIGHT = 4;
 
 // ── Initialization ────────────────────────────────────────────────────
@@ -109,48 +112,59 @@ async function fetchFrame(frameIndex: number): Promise<ImageData | null> {
     return frameCache.get(frameIndex)!;
   }
 
-  if (pendingFetches.has(frameIndex)) {
-    return null; // already being fetched
+  const pending = pendingFetches.get(frameIndex);
+  if (pending) {
+    return pending;
   }
 
-  pendingFetches.add(frameIndex);
+  const request = (async () => {
+    try {
+      const buffer = await invoke<ArrayBuffer>("read_recording_frame", {
+        frameIndex,
+      });
 
-  try {
-    const buffer = await invoke<ArrayBuffer>("read_recording_frame", {
-      frameIndex,
-    });
+      const bytes = new Uint8ClampedArray(buffer);
+      const imageData = new ImageData(bytes, videoWidth, videoHeight);
 
-    const bytes = new Uint8ClampedArray(buffer);
-    const imageData = new ImageData(bytes, videoWidth, videoHeight);
-
-    // Cache management: evict frames far from current position
-    if (frameCache.size >= MAX_CACHE_SIZE) {
-      const keys = [...frameCache.keys()];
-      for (const key of keys) {
-        if (Math.abs(key - frameIndex) > CACHE_AHEAD * 2) {
-          frameCache.delete(key);
-          if (frameCache.size < MAX_CACHE_SIZE) break;
-        }
-      }
+      // Cache management: evict frames far from current position
       if (frameCache.size >= MAX_CACHE_SIZE) {
-        let farthest = keys[0];
-        let maxDist = 0;
+        const keys = [...frameCache.keys()];
         for (const key of keys) {
-          const dist = Math.abs(key - frameIndex);
-          if (dist > maxDist) { maxDist = dist; farthest = key; }
+          if (Math.abs(key - frameIndex) > CACHE_AHEAD * 2) {
+            frameCache.delete(key);
+            if (frameCache.size < MAX_CACHE_SIZE) break;
+          }
         }
-        frameCache.delete(farthest);
+        if (frameCache.size >= MAX_CACHE_SIZE) {
+          let farthest = keys[0];
+          let maxDist = 0;
+          for (const key of keys) {
+            const dist = Math.abs(key - frameIndex);
+            if (dist > maxDist) { maxDist = dist; farthest = key; }
+          }
+          frameCache.delete(farthest);
+        }
       }
-    }
 
-    frameCache.set(frameIndex, imageData);
-    return imageData;
-  } catch (err) {
-    console.error(`Failed to fetch frame ${frameIndex}:`, err);
-    return null;
-  } finally {
-    pendingFetches.delete(frameIndex);
-  }
+      frameCache.set(frameIndex, imageData);
+      return imageData;
+    } catch (err) {
+      console.error(`Failed to fetch frame ${frameIndex}:`, err);
+      return null;
+    } finally {
+      pendingFetches.delete(frameIndex);
+    }
+  })();
+
+  pendingFetches.set(frameIndex, request);
+  return request;
+}
+
+function paintFrame(frameIndex: number, imageData: ImageData) {
+  currentFrame = frameIndex;
+  ctx.putImageData(imageData, 0, 0);
+  updatePlayhead();
+  updateTimeDisplay();
 }
 
 /** Synchronous render from cache. Returns true if frame was available. */
@@ -159,29 +173,39 @@ function renderFrameSync(frameIndex: number): boolean {
 
   const imageData = frameCache.get(frameIndex);
   if (imageData) {
-    currentFrame = frameIndex;
-    ctx.putImageData(imageData, 0, 0);
-    updatePlayhead();
-    updateTimeDisplay();
+    paintFrame(frameIndex, imageData);
     return true;
   }
   return false;
 }
 
-/** Async: fetch frame, render, and prefetch ahead. Used for seek/init. */
-async function fetchAndRender(frameIndex: number) {
-  if (frameIndex < 0 || frameIndex >= totalFrames) return;
-  currentFrame = frameIndex;
+async function renderFrameAsync(frameIndex: number): Promise<boolean> {
+  if (frameIndex < 0 || frameIndex >= totalFrames) return false;
 
-  const imageData = await fetchFrame(frameIndex);
-  // Only render if this frame is still current (guard against stale requests)
-  if (imageData && currentFrame === frameIndex) {
-    ctx.putImageData(imageData, 0, 0);
+  const cached = frameCache.get(frameIndex);
+  if (cached) {
+    paintFrame(frameIndex, cached);
+    prefetchFrames(frameIndex);
+    return true;
   }
 
+  currentFrame = frameIndex;
   updatePlayhead();
   updateTimeDisplay();
+
+  const imageData = await fetchFrame(frameIndex);
+  if (!imageData || currentFrame !== frameIndex) {
+    return false;
+  }
+
+  paintFrame(frameIndex, imageData);
   prefetchFrames(frameIndex);
+  return true;
+}
+
+/** Async: fetch frame, render, and prefetch ahead. Used for seek/init. */
+async function fetchAndRender(frameIndex: number) {
+  await renderFrameAsync(frameIndex);
 }
 
 function prefetchFrames(fromFrame: number) {
@@ -257,7 +281,7 @@ async function processSeek() {
     const imageData = await fetchFrame(target);
     // Only paint if still current (guard against newer seeks)
     if (imageData && currentFrame === target) {
-      ctx.putImageData(imageData, 0, 0);
+      paintFrame(target, imageData);
       prefetchFrames(target);
     }
   }
@@ -266,16 +290,29 @@ async function processSeek() {
 
 // ── Playback engine ───────────────────────────────────────────────────
 
-function startPlayback() {
-  if (isPlaying) return;
+async function startPlayback() {
+  if (isPlaying || isStartingPlayback || totalFrames <= 0) return;
+  isStartingPlayback = true;
+
+  const startFrame = resolvePlaybackStartFrame(
+    currentFrame,
+    trimStartFrame,
+    trimEndFrame
+  );
+  const rendered = await renderFrameAsync(startFrame);
+
+  isStartingPlayback = false;
+  if (!rendered) {
+    if (currentFrame === startFrame) {
+      console.error(`Failed to start playback at frame ${startFrame}`);
+    }
+    return;
+  }
+
   isPlaying = true;
   playBtn.textContent = "\u23F8";
 
-  if (currentFrame < trimStartFrame || currentFrame >= trimEndFrame) {
-    currentFrame = trimStartFrame;
-  }
-
-  prefetchFrames(currentFrame);
+  prefetchFrames(startFrame);
 
   lastFrameTime = performance.now();
   playbackLoop();
@@ -283,6 +320,8 @@ function startPlayback() {
 
 function stopPlayback() {
   isPlaying = false;
+  isStartingPlayback = false;
+  pendingPlaybackFrame = null;
   playBtn.textContent = "\u25B6";
   if (animFrameId) {
     cancelAnimationFrame(animFrameId);
@@ -310,8 +349,30 @@ function playbackLoop() {
 
       if (renderFrameSync(nextFrame)) {
         lastFrameTime = now - (elapsed % frameDuration);
+      } else {
+        if (pendingPlaybackFrame !== nextFrame) {
+          pendingPlaybackFrame = nextFrame;
+          void fetchFrame(nextFrame).then((imageData) => {
+            if (pendingPlaybackFrame === nextFrame) {
+              pendingPlaybackFrame = null;
+            }
+
+            if (!isPlaying || !imageData) {
+              if (isPlaying && !imageData) {
+                console.error(`Stopping playback because frame ${nextFrame} could not be loaded`);
+                stopPlayback();
+              }
+              return;
+            }
+
+            if (renderFrameSync(nextFrame)) {
+              lastFrameTime = performance.now();
+              prefetchFrames(nextFrame);
+            }
+          });
+        }
+        lastFrameTime = now;
       }
-      currentFrame = nextFrame;
 
       prefetchFrames(nextFrame);
     }
@@ -326,7 +387,7 @@ playBtn.addEventListener("click", () => {
   if (isPlaying) {
     stopPlayback();
   } else {
-    startPlayback();
+    void startPlayback();
   }
 });
 

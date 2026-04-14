@@ -5,6 +5,7 @@ import {
   createClipEditorSession,
   getPlaybackTerminalFrame,
   prepareExportRequest,
+  resolvePlaybackStartFrame,
   resolvePlayheadLeft,
   resolveTrimLayout,
   timelineFrameToOffset,
@@ -33,6 +34,19 @@ describe("clip editor frame range semantics", () => {
     const state = buildInitialClipEditorState(10, 30);
 
     expect(getPlaybackTerminalFrame(state.trimEndFrame)).toBe(9);
+  });
+
+  it("restarts from the selected first frame when play is pressed on the terminal frame", () => {
+    expect(resolvePlaybackStartFrame(9, 2, 10)).toBe(2);
+  });
+
+  it("starts from the selected first frame when the current frame is outside the trim range", () => {
+    expect(resolvePlaybackStartFrame(1, 2, 8)).toBe(2);
+    expect(resolvePlaybackStartFrame(8, 2, 8)).toBe(2);
+  });
+
+  it("continues from the current frame when it is inside the trim range and before the terminal frame", () => {
+    expect(resolvePlaybackStartFrame(5, 2, 8)).toBe(5);
   });
 });
 

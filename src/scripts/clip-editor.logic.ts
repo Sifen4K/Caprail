@@ -74,6 +74,20 @@ export function getPlaybackTerminalFrame(trimEndFrame: number): number {
   return Math.max(trimEndFrame - 1, 0);
 }
 
+export function resolvePlaybackStartFrame(
+  currentFrame: number,
+  trimStartFrame: number,
+  trimEndFrame: number
+): number {
+  const terminalFrame = getPlaybackTerminalFrame(trimEndFrame);
+
+  if (currentFrame < trimStartFrame || currentFrame >= terminalFrame) {
+    return trimStartFrame;
+  }
+
+  return currentFrame;
+}
+
 export function buildTimelineGeometry(
   containerWidth: number,
   trackStartInset: number,

@@ -32,47 +32,78 @@
       border-top: 1px solid #444;
     }
     #timeline {
+      --timeline-height: 40px;
+      --timeline-radius: 4px;
+      --trim-handle-visual-width: 8px;
+      --trim-handle-hit-outset: 6px;
+      --timeline-track-bg: #333;
+      --timeline-progress-bg: rgba(76, 175, 80, 0.3);
+      --timeline-playhead-color: #4CAF50;
+      --trim-handle-bg: #ff9800;
+      --trim-region-bg: rgba(255, 152, 0, 0.1);
       position: relative;
-      height: 40px;
-      background: #333;
-      border-radius: 4px;
+      height: var(--timeline-height);
       margin-bottom: 10px;
       cursor: pointer;
-      overflow: hidden;
+      overflow: visible;
       user-select: none;
+    }
+    #timeline-track {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: var(--timeline-track-bg);
+      border-radius: var(--timeline-radius);
+      pointer-events: none;
     }
     #timeline-progress {
       position: absolute;
       top: 0;
-      left: 0;
       height: 100%;
-      background: rgba(76, 175, 80, 0.3);
+      background: var(--timeline-progress-bg);
       pointer-events: none;
+      z-index: 1;
     }
     #timeline-playhead {
       position: absolute;
       top: 0;
       width: 2px;
       height: 100%;
-      background: #4CAF50;
+      background: var(--timeline-playhead-color);
       pointer-events: none;
+      z-index: 5;
     }
     .trim-handle {
       position: absolute;
       top: 0;
-      width: 8px;
+      width: calc(var(--trim-handle-visual-width) + var(--trim-handle-hit-outset));
       height: 100%;
-      background: #ff9800;
       cursor: ew-resize;
-      z-index: 2;
+      z-index: 4;
     }
-    #trim-start { left: 0; border-radius: 4px 0 0 4px; }
-    #trim-end { left: 100%; border-radius: 0 4px 4px 0; transform: translateX(-100%); }
+    .trim-handle-visual {
+      position: absolute;
+      top: 0;
+      width: var(--trim-handle-visual-width);
+      height: 100%;
+      background: var(--trim-handle-bg);
+      pointer-events: none;
+    }
+    #trim-start { left: 0; }
+    #trim-start .trim-handle-visual {
+      right: 0;
+      border-radius: var(--timeline-radius) 0 0 var(--timeline-radius);
+    }
+    #trim-end { left: 100%; }
+    #trim-end .trim-handle-visual {
+      left: 0;
+      border-radius: 0 var(--timeline-radius) var(--timeline-radius) 0;
+    }
     .trim-region {
       position: absolute;
       top: 0;
       height: 100%;
-      background: rgba(255, 152, 0, 0.1);
+      background: var(--trim-region-bg);
       pointer-events: auto;
       cursor: pointer;
       z-index: 1;
@@ -129,11 +160,16 @@
   </div>
   <div id="controls">
     <div id="timeline">
+      <div id="timeline-track"></div>
       <div class="trim-region" id="trim-region"></div>
       <div id="timeline-progress"></div>
       <div id="timeline-playhead"></div>
-      <div class="trim-handle" id="trim-start"></div>
-      <div class="trim-handle" id="trim-end"></div>
+      <div class="trim-handle" id="trim-start">
+        <div class="trim-handle-visual" id="trim-start-visual"></div>
+      </div>
+      <div class="trim-handle" id="trim-end">
+        <div class="trim-handle-visual" id="trim-end-visual"></div>
+      </div>
     </div>
     <div id="control-row">
       <button class="ctrl-btn" id="play-btn">▶</button>

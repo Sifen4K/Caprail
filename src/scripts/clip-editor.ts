@@ -3,9 +3,13 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   buildInitialClipEditorState,
+  buildTimelineGeometry,
   createClipEditorSession,
   getPlaybackTerminalFrame,
   prepareExportRequest,
+  resolvePlayheadLeft,
+  resolveTrimLayout,
+  timelineOffsetToFrame,
 } from "./clip-editor.logic";
 
 const canvas = document.getElementById("player-canvas") as HTMLCanvasElement;
@@ -14,9 +18,12 @@ const playBtn = document.getElementById("play-btn")!;
 const timeDisplay = document.getElementById("time-display")!;
 const speedSelect = document.getElementById("speed-select") as HTMLSelectElement;
 const timeline = document.getElementById("timeline")!;
+const timelineTrack = document.getElementById("timeline-track")!;
 const playhead = document.getElementById("timeline-playhead")!;
 const trimStartHandle = document.getElementById("trim-start")!;
 const trimEndHandle = document.getElementById("trim-end")!;
+const trimStartVisual = document.getElementById("trim-start-visual")!;
+const trimEndVisual = document.getElementById("trim-end-visual")!;
 const trimRegion = document.getElementById("trim-region")!;
 const exportMp4Btn = document.getElementById("export-mp4-btn")!;
 const exportGifBtn = document.getElementById("export-gif-btn")!;
@@ -197,6 +204,27 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function getTimelineGeometry() {
+  return buildTimelineGeometry(
+    timeline.clientWidth,
+    trimStartVisual.getBoundingClientRect().width,
+    trimEndVisual.getBoundingClientRect().width
+  );
+}
+
+function getTrimHandleLayoutMetrics() {
+  return {
+    startHandleWidth: trimStartHandle.getBoundingClientRect().width,
+    endHandleWidth: trimEndHandle.getBoundingClientRect().width,
+  };
+}
+
+function getFrameFromPointer(clientX: number): number {
+  const rect = timeline.getBoundingClientRect();
+  const geometry = getTimelineGeometry();
+  return timelineOffsetToFrame(clientX - rect.left, totalFrames, geometry);
+}
+
 /** Synchronously moves the playhead and updates UI; renders from cache if possible,
  *  otherwise queues an async fetch. */
 function seekToFrame(frameIndex: number) {
@@ -315,11 +343,7 @@ timeline.addEventListener("mousedown", (e) => {
   if (isPlaying) stopPlayback();
 
   dragMode = "scrub";
-
-  const rect = timeline.getBoundingClientRect();
-  const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-  const frameIndex = Math.round(ratio * (totalFrames - 1));
-  seekToFrame(frameIndex);
+  seekToFrame(getFrameFromPointer(e.clientX));
 });
 
 trimStartHandle.addEventListener("mousedown", (e) => {
@@ -343,28 +367,20 @@ trimRegion.addEventListener("mousedown", (e) => {
 
   // Clicking/dragging on the trim region scrubs the playhead
   dragMode = "scrub";
-
-  const rect = timeline.getBoundingClientRect();
-  const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-  const frameIndex = Math.round(ratio * (totalFrames - 1));
-  seekToFrame(frameIndex);
+  seekToFrame(getFrameFromPointer(e.clientX));
 });
 
 document.addEventListener("mousemove", (e) => {
   if (!dragMode) return;
-  const rect = timeline.getBoundingClientRect();
 
   switch (dragMode) {
     case "scrub": {
-      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const frameIndex = Math.round(ratio * (totalFrames - 1));
-      seekToFrame(frameIndex);
+      seekToFrame(getFrameFromPointer(e.clientX));
       break;
     }
 
     case "trim-start": {
-      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const frame = Math.round(ratio * (totalFrames - 1));
+      const frame = getFrameFromPointer(e.clientX);
       trimStartFrame = Math.min(frame, trimEndFrame - 1);
       currentFrame = trimStartFrame;
       updateTrimUI();
@@ -373,8 +389,7 @@ document.addEventListener("mousemove", (e) => {
     }
 
     case "trim-end": {
-      const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const frame = Math.round(ratio * (totalFrames - 1)) + 1;
+      const frame = getFrameFromPointer(e.clientX) + 1;
       trimEndFrame = Math.max(frame, trimStartFrame + 1);
       currentFrame = getPlaybackTerminalFrame(trimEndFrame);
       updateTrimUI();
@@ -393,20 +408,36 @@ document.addEventListener("mouseup", (e) => {
 // ── UI updates ────────────────────────────────────────────────────────
 
 function updatePlayhead() {
-  if (totalFrames > 0) {
-    const ratio = currentFrame / (totalFrames - 1);
-    playhead.style.left = `${ratio * 100}%`;
-  }
+  if (totalFrames <= 0) return;
+
+  const geometry = getTimelineGeometry();
+  const playheadLeft = resolvePlayheadLeft(
+    currentFrame,
+    totalFrames,
+    geometry,
+    playhead.getBoundingClientRect().width
+  );
+  playhead.style.left = `${playheadLeft}px`;
 }
 
 function updateTrimUI() {
   if (totalFrames <= 0) return;
-  const startRatio = trimStartFrame / (totalFrames - 1);
-  const endRatio = getPlaybackTerminalFrame(trimEndFrame) / (totalFrames - 1);
-  trimStartHandle.style.left = `${startRatio * 100}%`;
-  trimEndHandle.style.left = `${endRatio * 100}%`;
-  trimRegion.style.left = `${startRatio * 100}%`;
-  trimRegion.style.width = `${(endRatio - startRatio) * 100}%`;
+
+  const geometry = getTimelineGeometry();
+  const layout = resolveTrimLayout(
+    totalFrames,
+    trimStartFrame,
+    trimEndFrame,
+    geometry,
+    getTrimHandleLayoutMetrics()
+  );
+
+  timelineTrack.style.left = `${geometry.trackLeft}px`;
+  timelineTrack.style.width = `${geometry.trackWidth}px`;
+  trimStartHandle.style.left = `${layout.startHandleLeft}px`;
+  trimEndHandle.style.left = `${layout.endHandleLeft}px`;
+  trimRegion.style.left = `${layout.regionLeft}px`;
+  trimRegion.style.width = `${layout.regionWidth}px`;
 }
 
 function formatTime(secs: number): string {
@@ -487,3 +518,15 @@ async function doExport(format: "mp4" | "gif") {
 
 exportMp4Btn.addEventListener("click", () => doExport("mp4"));
 exportGifBtn.addEventListener("click", () => doExport("gif"));
+
+const resizeObserver = new ResizeObserver(() => {
+  updateTrimUI();
+  updatePlayhead();
+});
+
+resizeObserver.observe(timeline);
+resizeObserver.observe(trimStartHandle);
+resizeObserver.observe(trimEndHandle);
+resizeObserver.observe(trimStartVisual);
+resizeObserver.observe(trimEndVisual);
+resizeObserver.observe(playhead);

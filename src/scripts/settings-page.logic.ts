@@ -33,7 +33,7 @@ export interface SettingsSaveResult {
 }
 
 export function buildConfigFromSettingsForm(
-  _existingConfig: AppConfig,
+  existingConfig: AppConfig,
   formValues: SettingsFormValues
 ): AppConfig {
   return {
@@ -42,11 +42,11 @@ export function buildConfigFromSettingsForm(
     save_path: formValues.savePath,
     default_image_format: formValues.defaultImageFormat,
     auto_start: formValues.autoStart,
-    tray_menu_screenshot: "Screenshot",
-    tray_menu_record: "Record",
-    tray_menu_settings: "Settings",
-    tray_menu_quit: "Quit",
-    language: "en",
+    tray_menu_screenshot: existingConfig.tray_menu_screenshot,
+    tray_menu_record: existingConfig.tray_menu_record,
+    tray_menu_settings: existingConfig.tray_menu_settings,
+    tray_menu_quit: existingConfig.tray_menu_quit,
+    language: existingConfig.language,
   };
 }
 

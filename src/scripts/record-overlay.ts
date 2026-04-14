@@ -1,39 +1,27 @@
-import { getCurrentWindow, availableMonitors } from "@tauri-apps/api/window";
-import type { Monitor } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { resolution } from "./resolution-context";
+import type { PhysicalPixel } from "./resolution-context";
 import { loadLocale, t } from "./i18n.ts";
+import {
+  buildPhysicalRect,
+  toPhysicalCanvasPoint,
+  toSelectionRect,
+  translateCanvasRectToDesktop,
+} from "./physical-capture.logic";
 
 const canvas = document.getElementById("overlay") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 
+let dpr = 1;
 let isSelecting = false;
-// Selection coordinates in physical pixels (desktop coordinates)
+// Selection coordinates in physical pixels (canvas-relative)
 let startX = 0;
 let startY = 0;
 let currentX = 0;
 let currentY = 0;
-// Physical origin of the overlay window on the desktop
-let originPhysX = 0;
-let originPhysY = 0;
-// List of all monitors with their scale factors (updated on resize)
-let monitors: Monitor[] = [];
-
-/** Find the scale factor for a given physical point by checking which monitor contains it */
-function getScaleFactorForPoint(physX: number, physY: number): number {
-  for (const mon of monitors) {
-    if (
-      physX >= mon.position.x &&
-      physX < mon.position.x + mon.size.width &&
-      physY >= mon.position.y &&
-      physY < mon.position.y + mon.size.height
-    ) {
-      return mon.scaleFactor;
-    }
-  }
-  // Fallback: assume 1.0 if not found
-  return 1.0;
-}
+// (originPhysX/Y and monitors variables removed — use resolution context instead)
 
 async function resize() {
   // Lock window position and compensate for any invisible frame offset.
@@ -46,12 +34,9 @@ async function resize() {
   }
 
   const sz = await getCurrentWindow().innerSize();
-  const pos = await getCurrentWindow().innerPosition();
-  // Store physical client-area origin
-  originPhysX = pos.x;
-  originPhysY = pos.y;
-  // Fetch all monitor geometries for per-monitor hint rendering
-  monitors = await availableMonitors();
+  // Refresh resolution context: updates monitor list and window physical origin
+  await resolution.refresh();
+  dpr = window.devicePixelRatio || 1;
   // Set canvas to physical pixel size to match window
   canvas.width = sz.width;
   canvas.height = sz.height;
@@ -66,26 +51,17 @@ function draw() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (isSelecting) {
-    const rect = {
-      x: Math.min(startX, currentX),
-      y: Math.min(startY, currentY),
-      w: Math.abs(currentX - startX),
-      h: Math.abs(currentY - startY),
-    };
+    const rect = buildPhysicalRect(
+      { x: startX, y: startY },
+      { x: currentX, y: currentY },
+    );
     if (rect.w > 2 && rect.h > 2) {
       ctx.clearRect(rect.x, rect.y, rect.w, rect.h);
       ctx.strokeStyle = "#f44336";
       ctx.lineWidth = 2;
       ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-      // Show dimensions - use the scale factor at the rect center for display
-      const centerX = originPhysX + rect.x + rect.w / 2;
-      const centerY = originPhysY + rect.y + rect.h / 2;
-      const sf = getScaleFactorForPoint(centerX, centerY);
-      // Display logical pixels (physical / scaleFactor) for user-friendly dimensions
-      const displayW = Math.round(rect.w / sf);
-      const displayH = Math.round(rect.h / sf);
-      const label = `${displayW} x ${displayH}`;
+      const label = `${Math.round(rect.w)} x ${Math.round(rect.h)}`;
       ctx.font = "13px monospace";
       const metrics = ctx.measureText(label);
       const labelX = rect.x + rect.w / 2 - metrics.width / 2;
@@ -99,7 +75,7 @@ function draw() {
     // Draw hint text at the center of each physical monitor.
     const drawHintForMonitor = (physCX: number, physCY: number) => {
       // Scale text size by the monitor's scale factor for readability
-      const sf = getScaleFactorForPoint(physCX, physCY);
+      const sf = resolution.getScaleFactorAtPhysical(physCX as PhysicalPixel, physCY as PhysicalPixel);
       const fontSize = Math.round(24 * sf);
       ctx.font = `${fontSize}px sans-serif`;
       ctx.fillStyle = "#fff";
@@ -110,16 +86,16 @@ function draw() {
       ctx.fillText(t("recordOverlay.pressEscCancel"), physCX, physCY + 30 * sf);
     };
 
-    if (monitors.length > 0) {
-      for (const mon of monitors) {
-        const physCenterX = mon.position.x + mon.size.width / 2;
-        const physCenterY = mon.position.y + mon.size.height / 2;
+    const monitorList = resolution.monitors;
+    if (monitorList.length > 0) {
+      for (const mon of monitorList) {
+        const physCenterX = mon.x + mon.width / 2;
+        const physCenterY = mon.y + mon.height / 2;
         // physCenterX/Y is in desktop coordinates; convert to canvas-relative
-        const canvasX = physCenterX - originPhysX;
-        const canvasY = physCenterY - originPhysY;
+        const canvasPos = resolution.desktopPhysicalToCanvas(physCenterX as PhysicalPixel, physCenterY as PhysicalPixel);
         // Only draw if within canvas bounds
-        if (canvasX >= 0 && canvasX <= canvas.width && canvasY >= 0 && canvasY <= canvas.height) {
-          drawHintForMonitor(canvasX, canvasY);
+        if (canvasPos.x >= 0 && canvasPos.x <= canvas.width && canvasPos.y >= 0 && canvasPos.y <= canvas.height) {
+          drawHintForMonitor(canvasPos.x, canvasPos.y);
         }
       }
     } else {
@@ -145,18 +121,17 @@ function draw() {
 
 canvas.addEventListener("mousedown", (e) => {
   isSelecting = true;
-  // e.clientX/Y is in the webview's coordinate system.
-  // Since the overlay is created with PhysicalPosition, we treat these
-  // as physical coordinates directly (the webview is DPI-aware).
-  startX = e.clientX;
-  startY = e.clientY;
-  currentX = e.clientX;
-  currentY = e.clientY;
+  const point = toPhysicalCanvasPoint(e.clientX, e.clientY, dpr);
+  startX = point.x;
+  startY = point.y;
+  currentX = point.x;
+  currentY = point.y;
 });
 
 canvas.addEventListener("mousemove", (e) => {
-  currentX = e.clientX;
-  currentY = e.clientY;
+  const point = toPhysicalCanvasPoint(e.clientX, e.clientY, dpr);
+  currentX = point.x;
+  currentY = point.y;
   draw();
 });
 
@@ -165,40 +140,23 @@ canvas.addEventListener("mouseup", async () => {
   isSelecting = false;
 
   // Physical rectangle in desktop coordinates
-  const physRect = {
-    x: Math.min(startX, currentX),
-    y: Math.min(startY, currentY),
-    w: Math.abs(currentX - startX),
-    h: Math.abs(currentY - startY),
-  };
+  const physRect = buildPhysicalRect(
+    { x: startX, y: startY },
+    { x: currentX, y: currentY },
+  );
 
   if (physRect.w > 10 && physRect.h > 10) {
-    // The selection is in physical coordinates.
-    // For the recording: use physical coords directly (BitBlt uses physical coords).
-    // For the indicator window: Tauri uses logical coords, so convert.
-
-    // Find the scale factor at the center of the selection to convert
-    // from physical to logical for window positioning.
-    const centerX = originPhysX + physRect.x + physRect.w / 2;
-    const centerY = originPhysY + physRect.y + physRect.h / 2;
-    const sf = getScaleFactorForPoint(centerX, centerY);
-
-    // Convert physical selection to logical (for indicator window)
-    // The indicator window expects logical coords: position = physical / scaleFactor
-    const logX = (originPhysX + physRect.x) / sf;
-    const logY = (originPhysY + physRect.y) / sf;
-    const logW = physRect.w / sf;
-    const logH = physRect.h / sf;
+    const desktopRect = translateCanvasRectToDesktop(physRect, {
+      x: resolution.windowOrigin.x,
+      y: resolution.windowOrigin.y,
+    });
+    const selection = toSelectionRect(desktopRect);
 
     await emit("recording-area-selected", {
-      x: physRect.x,      // physical, for BitBlt capture
-      y: physRect.y,      // physical, for BitBlt capture
-      width: physRect.w,  // physical, for BitBlt capture
-      height: physRect.h, // physical, for BitBlt capture
-      logicalX: logX,     // logical, for indicator window position
-      logicalY: logY,     // logical, for indicator window position
-      logicalWidth: logW, // logical, for indicator window size
-      logicalHeight: logH,// logical, for indicator window size
+      x: selection.x,
+      y: selection.y,
+      width: selection.width,
+      height: selection.height,
     });
     // Do not close here — main.ts will close this window and wait for
     // its destruction before starting the recording, avoiding the race
@@ -219,4 +177,8 @@ window.addEventListener("keydown", async (e) => {
 });
 
 window.addEventListener("load", resize);
+window.addEventListener("resize", () => {
+  dpr = window.devicePixelRatio || 1;
+  resize();
+});
 loadLocale(new URLSearchParams(document.location.search).get("lang") || "en");

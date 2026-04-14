@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
+import { PhysicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import { computeDraggedPhysicalPosition } from "./physical-capture.logic";
 
 const canvas = document.getElementById("pin-image") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -37,9 +38,6 @@ async function loadPinImage() {
     return;
   }
 
-  // Get DPI scale to convert to logical size
-  const dpiScale = window.devicePixelRatio;
-
   try {
     // Read image data from Rust backend
     const buffer = await invoke<ArrayBuffer>("read_pin_image", { id: pinId });
@@ -54,18 +52,14 @@ async function loadPinImage() {
       console.log("Pin image loaded successfully");
       originalImage = img;
 
-      // Calculate logical size for window
-      const logicalWidth = Math.round(originalPhysicalWidth / dpiScale);
-      const logicalHeight = Math.round(originalPhysicalHeight / dpiScale);
-
-      baseWidth = logicalWidth;
-      baseHeight = logicalHeight;
+      baseWidth = originalPhysicalWidth;
+      baseHeight = originalPhysicalHeight;
 
       // Initial render at scale 1
       renderScaledImage(1);
 
-      // Resize window to fit image (logical size)
-      await win.setSize(new LogicalSize(logicalWidth, logicalHeight));
+      // Resize window to fit the image in physical pixels.
+      await win.setSize(new PhysicalSize(originalPhysicalWidth, originalPhysicalHeight));
 
       // Clean up blob URL
       URL.revokeObjectURL(url);
@@ -86,23 +80,12 @@ async function loadPinImage() {
 function renderScaledImage(newScale: number) {
   if (!originalImage) return;
 
-  const dpiScale = window.devicePixelRatio;
-
-  // Calculate new physical canvas size for crisp rendering
   const newPhysicalWidth = Math.round(originalPhysicalWidth * newScale);
   const newPhysicalHeight = Math.round(originalPhysicalHeight * newScale);
 
-  // Calculate logical size for display
-  const newLogicalWidth = Math.round(newPhysicalWidth / dpiScale);
-  const newLogicalHeight = Math.round(newPhysicalHeight / dpiScale);
-
-  // Set canvas physical size
   canvas.width = newPhysicalWidth;
   canvas.height = newPhysicalHeight;
-
-  // Set canvas CSS size to match logical size
-  canvas.style.width = `${newLogicalWidth}px`;
-  canvas.style.height = `${newLogicalHeight}px`;
+  ctx.clearRect(0, 0, newPhysicalWidth, newPhysicalHeight);
 
   // Draw scaled image
   ctx.drawImage(originalImage, 0, 0, newPhysicalWidth, newPhysicalHeight);
@@ -149,19 +132,17 @@ document.addEventListener("mousemove", async (e) => {
   if (!isDragging) return;
 
   try {
-    // movementX/Y are in CSS pixels, use LogicalPosition for consistency
-    const dx = e.movementX;
-    const dy = e.movementY;
-
-    if (dx === 0 && dy === 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (e.movementX === 0 && e.movementY === 0) return;
 
     const pos = await win.outerPosition();
-    const dpiScale = window.devicePixelRatio;
-    // Convert physical position to logical, add delta, set as logical
-    await win.setPosition(new LogicalPosition(
-      Math.round(pos.x / dpiScale + dx),
-      Math.round(pos.y / dpiScale + dy)
-    ));
+    const nextPosition = computeDraggedPhysicalPosition(
+      { x: pos.x, y: pos.y },
+      e.movementX,
+      e.movementY,
+      dpr,
+    );
+    await win.setPosition(new PhysicalPosition(nextPosition.x, nextPosition.y));
   } catch (err) {
     console.error("Drag error:", err);
   }
@@ -195,7 +176,7 @@ document.addEventListener("wheel", async (e) => {
     // Re-render image at new scale
     renderScaledImage(scale);
     // Update window size to match
-    await win.setSize(new LogicalSize(newWidth, newHeight));
+    await win.setSize(new PhysicalSize(newWidth, newHeight));
   }
 }, { passive: false });
 

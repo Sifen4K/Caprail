@@ -64,7 +64,7 @@ setupShortcutCapture(recordInput);
 
 // Save button
 document.getElementById("save")!.onclick = async () => {
-  const existingConfig = loadedConfig ?? {
+  const existingConfig = loadedConfig ?? await invoke<AppConfig>("load_config").catch(() => ({
     screenshot_shortcut: originalScreenshotShortcut,
     record_shortcut: originalRecordShortcut,
     save_path: "",
@@ -75,7 +75,7 @@ document.getElementById("save")!.onclick = async () => {
     tray_menu_record: "Record",
     tray_menu_settings: "Settings",
     tray_menu_quit: "Quit",
-  };
+  }));
 
   const saveResult = prepareSettingsSave(existingConfig, {
     screenshotShortcut: screenshotInput.value,

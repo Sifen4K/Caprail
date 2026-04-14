@@ -1,6 +1,8 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { PhysicalPosition } from "@tauri-apps/api/window";
+import { computeDraggedPhysicalPosition } from "./physical-capture.logic";
 
 const durationEl = document.getElementById("duration")!;
 const pauseBtn = document.getElementById("pause-btn")!;
@@ -25,18 +27,20 @@ document.addEventListener("mousedown", (e) => {
 
 document.addEventListener("mousemove", async (e) => {
   if (!isDragging) return;
-  // screenX/screenY are in CSS (logical) pixels in Chromium-based WebView2,
-  // so dx/dy are logical deltas — no DPI scaling needed here.
-  const dx = e.screenX - dragStartX;
-  const dy = e.screenY - dragStartY;
+  const dpr = window.devicePixelRatio || 1;
+  const movementX = e.screenX - dragStartX;
+  const movementY = e.screenY - dragStartY;
   dragStartX = e.screenX;
   dragStartY = e.screenY;
 
   const pos = await win.outerPosition();
-  const dpr = window.devicePixelRatio || 1;
-  const { LogicalPosition } = await import("@tauri-apps/api/dpi");
-  // outerPosition() returns PhysicalPosition; convert to logical before adding logical delta
-  await win.setPosition(new LogicalPosition(pos.x / dpr + dx, pos.y / dpr + dy));
+  const nextPosition = computeDraggedPhysicalPosition(
+    { x: pos.x, y: pos.y },
+    movementX,
+    movementY,
+    dpr,
+  );
+  await win.setPosition(new PhysicalPosition(nextPosition.x, nextPosition.y));
 });
 
 document.addEventListener("mouseup", () => {

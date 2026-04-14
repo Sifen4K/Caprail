@@ -1,5 +1,6 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { PhysicalPosition, PhysicalSize, availableMonitors } from "@tauri-apps/api/window";
+import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { resolution } from "./resolution-context";
 
 let recordWindow: WebviewWindow | null = null;
 
@@ -9,25 +10,15 @@ export async function createRecordingCaptureWindow() {
     recordWindow = null;
   }
 
-  // Compute the virtual screen bounds in PHYSICAL pixels.
-  // Using physical coords ensures the overlay covers the exact screen area
-  // regardless of per-monitor DPI scaling, avoiding coordinate mismatches
-  // that occur when logical coords are computed with mixed scale factors.
-  const monitors = await availableMonitors();
-  let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
-  if (monitors.length > 0) {
-    minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
-    for (const m of monitors) {
-      // m.position and m.size are in physical pixels (desktop coordinates)
-      minX = Math.min(minX, m.position.x);
-      minY = Math.min(minY, m.position.y);
-      maxX = Math.max(maxX, m.position.x + m.size.width);
-      maxY = Math.max(maxY, m.position.y + m.size.height);
-    }
-  }
-
-  const physWidth = maxX - minX;
-  const physHeight = maxY - minY;
+  // Refresh monitor info and compute the virtual screen bounds in PHYSICAL pixels.
+  // Using resolution.getVirtualDesktopBounds() centralises the per-monitor DPI
+  // logic and handles mixed-DPI and negative-origin setups correctly.
+  await resolution.refresh();
+  const physical = resolution.getVirtualDesktopBounds();
+  const minX = physical.x;
+  const minY = physical.y;
+  const physWidth = physical.w;
+  const physHeight = physical.h;
 
   // Create window with minimal initial size - we'll set the actual size and position
   // using PhysicalSize and PhysicalPosition after creation to ensure physical coords.

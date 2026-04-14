@@ -35,7 +35,7 @@ export function buildInitialClipEditorState(
     fps,
     duration: totalFrames / fps,
     trimStartFrame: 0,
-    trimEndFrame: totalFrames - 1,
+    trimEndFrame: totalFrames,
   };
 }
 
@@ -50,7 +50,7 @@ export function toExportFrameRange(trimStartFrame: number, trimEndFrame: number)
 }
 
 export function getPlaybackTerminalFrame(trimEndFrame: number): number {
-  return trimEndFrame - 1;
+  return Math.max(trimEndFrame - 1, 0);
 }
 
 export function createClipEditorSession(

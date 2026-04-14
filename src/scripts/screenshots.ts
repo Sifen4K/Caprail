@@ -1,6 +1,7 @@
-import { availableMonitors } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
+import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { resolution } from "./resolution-context";
 
 interface MonitorInfo {
   x: number;
@@ -31,45 +32,16 @@ export async function createScreenCaptureWindow() {
   // Pre-capture the virtual screen BEFORE creating overlay window
   const vsInfo = await invoke<VirtualScreenInfo>("capture_virtual_screen");
 
-  // Get physical monitor info from Rust backend
+  // Get physical monitor info from Rust backend (used by overlay for coordinate mapping)
   const physicalMonitors = await invoke<MonitorInfo[]>("get_monitors");
   console.log("Physical monitors:", physicalMonitors);
 
-  // Calculate bounding rect of all monitors in physical coordinates
-  let minX = 0, minY = 0, maxX = 1920, maxY = 1080;
-  if (physicalMonitors.length > 0) {
-    minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
-    for (const m of physicalMonitors) {
-      minX = Math.min(minX, m.x);
-      minY = Math.min(minY, m.y);
-      maxX = Math.max(maxX, m.x + m.width);
-      maxY = Math.max(maxY, m.y + m.height);
-    }
-  }
-  console.log("Physical bounding rect:", minX, minY, maxX, maxY);
+  // Refresh resolution context and obtain bounding rects in one call.
+  // getVirtualDesktopBounds() handles mixed-DPI and negative origins correctly.
+  await resolution.refresh();
+  const physical = resolution.getVirtualDesktopBounds();
 
-  // Get monitor info from Tauri API and convert to logical coordinates for window sizing.
-  // availableMonitors() returns PhysicalPosition and PhysicalSize; we must convert
-  // to logical coords using each monitor's scaleFactor because WebviewWindow x/y/width/height
-  // expect logical coordinates.
-  const monitors = await availableMonitors();
-  let logicalMinX = 0, logicalMinY = 0, logicalMaxX = 1920, logicalMaxY = 1080;
-  if (monitors.length > 0) {
-    logicalMinX = Infinity; logicalMinY = Infinity; logicalMaxX = -Infinity; logicalMaxY = -Infinity;
-    for (const m of monitors) {
-      // m.position and m.size are in physical pixels; convert to logical
-      const sf = m.scaleFactor;
-      const logX = m.position.x / sf;
-      const logY = m.position.y / sf;
-      const logW = m.size.width / sf;
-      const logH = m.size.height / sf;
-      logicalMinX = Math.min(logicalMinX, logX);
-      logicalMinY = Math.min(logicalMinY, logY);
-      logicalMaxX = Math.max(logicalMaxX, logX + logW);
-      logicalMaxY = Math.max(logicalMaxY, logY + logH);
-    }
-  }
-  console.log("Logical bounding rect:", logicalMinX, logicalMinY, logicalMaxX, logicalMaxY);
+  console.log("Physical bounding rect:", physical.x, physical.y, physical.x + physical.w, physical.y + physical.h);
 
   // Pass pre-capture metadata via URL params
   const params = new URLSearchParams({
@@ -80,13 +52,14 @@ export async function createScreenCaptureWindow() {
     vsHeight: String(vsInfo.height),
   });
 
-  // Use logical coordinates for window creation (Tauri uses logical coords)
+  // Use dummy size/position; real physical geometry is applied in tauri://created.
+  // This matches the pattern used by recording.ts for correct mixed-DPI placement.
   captureWindow = new WebviewWindow("screenshot-overlay", {
     url: `src/screenshot-overlay.html?${params}`,
-    width: logicalMaxX - logicalMinX,
-    height: logicalMaxY - logicalMinY,
-    x: logicalMinX,
-    y: logicalMinY,
+    width: 100,
+    height: 100,
+    x: 0,
+    y: 0,
     transparent: true,
     decorations: false,
     shadow: false,
@@ -101,7 +74,14 @@ export async function createScreenCaptureWindow() {
     captureWindow = null;
   });
 
-  captureWindow.once("tauri://created", () => {
+  captureWindow.once("tauri://created", async () => {
+    try {
+      const bounds = resolution.getVirtualDesktopBounds();
+      await captureWindow!.setSize(new PhysicalSize(bounds.w, bounds.h));
+      await captureWindow!.setPosition(new PhysicalPosition(bounds.x, bounds.y));
+    } catch (e) {
+      console.error("Failed to set screenshot window size/position:", e);
+    }
     console.log("Screenshot overlay window created");
   });
 

@@ -2,7 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { register, unregister, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import { resolution, type PhysicalPixel } from "./resolution-context";
+import { computeCenteredRect, computeControlWindowGeometry } from "./physical-capture.logic";
 
 const status = document.getElementById("status")!;
 
@@ -144,12 +147,16 @@ async function openPinWindow(data: { id: number; width: number; height: number }
 
   const id = `pin-${++pinCounter}`;
 
-  // Pass pin ID and dimensions to pin window
-  new WebviewWindow(id, {
+  await resolution.refresh().catch(() => {});
+  const desktopBounds = resolution.getVirtualDesktopBounds();
+  const pinRect = computeCenteredRect(data.width, data.height, desktopBounds);
+
+  const pinWindow = new WebviewWindow(id, {
     url: `src/pin.html?pinId=${data.id}&width=${data.width}&height=${data.height}`,
-    width: Math.min(Math.round(data.width / window.devicePixelRatio), 800),
-    height: Math.min(Math.round(data.height / window.devicePixelRatio), 600),
-    center: true,
+    width: 100,
+    height: 100,
+    x: 0,
+    y: 0,
     decorations: false,
     transparent: true,
     shadow: false,
@@ -157,6 +164,15 @@ async function openPinWindow(data: { id: number; width: number; height: number }
     skipTaskbar: true,
     resizable: false,
     title: "Pin",
+  });
+
+  pinWindow.once("tauri://created", async () => {
+    try {
+      await pinWindow.setSize(new PhysicalSize(pinRect.width, pinRect.height));
+      await pinWindow.setPosition(new PhysicalPosition(pinRect.x, pinRect.y));
+    } catch (e) {
+      console.error("Failed to apply pin window physical geometry:", e);
+    }
   });
 }
 
@@ -183,6 +199,14 @@ async function showClipEditor() {
 }
 
 async function setup() {
+  // Initialise resolution context once at startup so monitor info is available
+  // for pin window sizing and other operations before overlays are created.
+  try {
+    await resolution.init();
+  } catch {
+    // Non-fatal: resolution context falls back to defaults
+  }
+
   // Listen for screenshot captured from overlay
   await listen<{ id: number; width: number; height: number }>(
     "screenshot-captured",
@@ -215,14 +239,10 @@ async function setup() {
   // Listen for recording area selection
   await listen<{
     x: number; y: number; width: number; height: number;
-    logicalX: number; logicalY: number; logicalWidth: number; logicalHeight: number;
   }>(
     "recording-area-selected",
     async (event) => {
-      // Physical pixel coords for the recording backend
       const { x, y, width, height } = event.payload;
-      // Logical pixel coords for window positioning (Tauri window API uses logical coords)
-      const { logicalX, logicalY, logicalWidth, logicalHeight } = event.payload;
       updateStatus("Starting recording...");
 
       // Step 1: Close the record-overlay (red selection border) and wait
@@ -256,6 +276,20 @@ async function setup() {
       }
 
       try {
+        await resolution.refresh().catch(() => {});
+        const selectionCenterX = x + width / 2;
+        const selectionCenterY = y + height / 2;
+        const controlScale = resolution.getScaleFactorAtPhysical(
+          selectionCenterX as PhysicalPixel,
+          selectionCenterY as PhysicalPixel,
+        );
+        const desktopBounds = resolution.getVirtualDesktopBounds();
+        const controlRect = computeControlWindowGeometry(
+          { x, y, width, height },
+          desktopBounds,
+          controlScale,
+        );
+
         // Pre-create clip editor window (hidden) to warm up WebView2
         preCreatedClipEditor = new WebviewWindow("clip-editor", {
           url: "src/clip-editor.html",
@@ -282,10 +316,10 @@ async function setup() {
         // otherwise the green border will appear in the captured video.
         const indicatorWindow = new WebviewWindow("record-indicator", {
           url: "src/record-indicator.html",
-          width: Math.round(logicalWidth),
-          height: Math.round(logicalHeight),
-          x: Math.round(logicalX),
-          y: Math.round(logicalY),
+          width: 100,
+          height: 100,
+          x: 0,
+          y: 0,
           decorations: false,
           transparent: true,
           shadow: false,
@@ -320,6 +354,12 @@ async function setup() {
           });
 
           indicatorWindow.once("tauri://created", async () => {
+            try {
+              await indicatorWindow.setSize(new PhysicalSize(Math.round(width), Math.round(height)));
+              await indicatorWindow.setPosition(new PhysicalPosition(Math.round(x), Math.round(y)));
+            } catch (geometryError) {
+              console.warn("Failed to apply indicator physical geometry:", geometryError);
+            }
             // Small delay to ensure the window is fully initialized by the OS
             await new Promise(r => setTimeout(r, 100));
             // Compensate for any invisible frame offset so the green border
@@ -343,10 +383,10 @@ async function setup() {
         // Open recording control bar below the selected area
         const controlWindow = new WebviewWindow("record-control", {
           url: "src/record-control.html",
-          width: 220,
-          height: 52,
-          x: Math.round(logicalX + logicalWidth / 2 - 110),
-          y: Math.round(logicalY + logicalHeight + 10),
+          width: 100,
+          height: 100,
+          x: 0,
+          y: 0,
           decorations: false,
           transparent: true,
           shadow: false,
@@ -357,6 +397,12 @@ async function setup() {
         });
         // Exclude control bar from screen capture with retry for robustness
         controlWindow.once("tauri://created", async () => {
+          try {
+            await controlWindow.setSize(new PhysicalSize(controlRect.width, controlRect.height));
+            await controlWindow.setPosition(new PhysicalPosition(controlRect.x, controlRect.y));
+          } catch (geometryError) {
+            console.warn("Failed to apply control window physical geometry:", geometryError);
+          }
           await excludeWindowFromCapture("record-control", 3);
         });
       } catch (err) {

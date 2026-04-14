@@ -1,11 +1,16 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { resolution } from "./resolution-context";
+import type { PhysicalPixel } from "./resolution-context";
 import {
-  findWindowAtLogicalPoint,
-  overlayLogicalToPhysical as mapOverlayLogicalToPhysical,
-  physicalToOverlayLogical as mapPhysicalToOverlayLogical,
-} from "./coordinate-mapping";
+  buildPhysicalRect,
+  findMonitorAtPoint,
+  findSmallestWindowAtPoint,
+  toPhysicalCanvasPoint,
+  toSelectionRect,
+  translateCanvasRectToDesktop,
+} from "./physical-capture.logic";
 
 interface WindowInfo {
   title: string;
@@ -14,15 +19,6 @@ interface WindowInfo {
   width: number;
   height: number;
   hwnd: number;
-}
-
-interface MonitorInfo {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  scale_factor: number;
-  is_primary: boolean;
 }
 
 // Pre-capture parameters from URL
@@ -45,12 +41,7 @@ let windowList: WindowInfo[] = [];
 let hoveredWindow: WindowInfo | null = null;
 let lastClickTime = 0;
 
-// DPI scaling factor - converts logical coordinates to physical pixels
-let dpiScale = 1;
-// Monitor physical origin offset for coordinate mapping
-let monitorOriginX = 0;
-let monitorOriginY = 0;
-let monitorList: MonitorInfo[] = [];
+let dpr = 1;
 
 // Offscreen canvas holding the pre-captured virtual screen image
 let bgCanvas: HTMLCanvasElement | null = null;
@@ -66,27 +57,18 @@ async function init() {
   const sz = await getCurrentWindow().innerSize();
   canvas.width = sz.width;
   canvas.height = sz.height;
+  dpr = window.devicePixelRatio || 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Get DPI scaling factor
-  dpiScale = window.devicePixelRatio;
-
-  // Scale context so all drawing uses logical (CSS) coordinates.
-  // The canvas bitmap is set to physical pixel dimensions; the transform
-  // maps logical drawing calls to physical canvas pixels.
-  ctx.setTransform(dpiScale, 0, 0, dpiScale, 0, 0);
-
-  // Load monitor info for coordinate mapping
+  // Initialise resolution context: loads monitor list and window geometry.
+  // monitorOriginX/Y are now derived from resolution.getVirtualDesktopBounds()
+  // and resolution.windowOrigin as needed.
   try {
-    monitorList = await invoke<MonitorInfo[]>("get_monitors");
-    // Calculate monitor origin offset (minX, minY from all monitors)
-    if (monitorList.length > 0) {
-      monitorOriginX = Math.min(...monitorList.map(m => m.x));
-      monitorOriginY = Math.min(...monitorList.map(m => m.y));
-    }
-    console.log("Monitor origin:", monitorOriginX, monitorOriginY);
-    console.log("Monitors:", monitorList);
+    await resolution.init();
+    console.log("Monitor origin:", resolution.getVirtualDesktopBounds());
+    console.log("Monitors:", resolution.monitors);
   } catch {
-    monitorList = [];
+    // Silently ignore – resolution context will fall back to defaults
   }
 
   // Load window list for hover highlight
@@ -113,80 +95,55 @@ async function init() {
   draw();
 }
 
-// Convert physical pixel coordinates to overlay window relative logical coordinates
-function physicalToOverlayLogical(physicalX: number, physicalY: number): { x: number; y: number } {
-  return mapPhysicalToOverlayLogical(
-    physicalX,
-    physicalY,
-    monitorOriginX,
-    monitorOriginY,
-    dpiScale,
-    monitorList
-  );
+function canvasToDesktopPhysical(canvasX: number, canvasY: number) {
+  return resolution.canvasToDesktopPhysical(canvasX as PhysicalPixel, canvasY as PhysicalPixel);
 }
 
-function findWindowAt(x: number, y: number): WindowInfo | null {
-  return findWindowAtLogicalPoint(
-    x,
-    y,
-    windowList,
-    monitorOriginX,
-    monitorOriginY,
-    dpiScale,
-    monitorList
-  );
+function desktopToCanvasPhysical(physicalX: number, physicalY: number): { x: number; y: number } {
+  const point = resolution.desktopPhysicalToCanvas(physicalX as PhysicalPixel, physicalY as PhysicalPixel);
+  return {
+    x: point.x,
+    y: point.y,
+  };
 }
 
-// Draw a region from the pre-captured image onto the main canvas (replaces clearRect).
-// x, y, w, h are in logical coordinates (CSS pixels). The source image is in physical
-// pixels, so we scale the source rect. The canvas context has a dpiScale transform,
-// so the destination rect is in logical coordinates.
-function drawBackground(x: number, y: number, w: number, h: number) {
+function findWindowAtCanvasPoint(canvasX: number, canvasY: number): WindowInfo | null {
+  const desktopPoint = canvasToDesktopPhysical(canvasX, canvasY);
+  return findSmallestWindowAtPoint({ x: desktopPoint.x, y: desktopPoint.y }, windowList);
+}
+
+function drawBackgroundRegion(desktopX: number, desktopY: number, width: number, height: number, canvasX: number, canvasY: number) {
   if (!bgCanvas) return;
-  // Convert overlay logical coords to pre-capture physical pixel coords.
-  // The pre-capture origin may differ from the monitor origin, but for a
-  // full virtual-screen capture both are typically (monitorOriginX, monitorOriginY).
-  const srcX = x * dpiScale;
-  const srcY = y * dpiScale;
-  const srcW = w * dpiScale;
-  const srcH = h * dpiScale;
-  ctx.drawImage(bgCanvas, srcX, srcY, srcW, srcH, x, y, w, h);
+  const srcX = desktopX - vsOriginX;
+  const srcY = desktopY - vsOriginY;
+  ctx.drawImage(bgCanvas, srcX, srcY, width, height, canvasX, canvasY, width, height);
 }
 
 function draw() {
-  // Logical dimensions (physical canvas size / dpiScale)
-  const logicalW = canvas.width / dpiScale;
-  const logicalH = canvas.height / dpiScale;
+  const canvasW = canvas.width;
+  const canvasH = canvas.height;
 
-  // Draw the full pre-captured image as background (logical coords)
   if (bgCanvas) {
-    ctx.drawImage(bgCanvas, 0, 0, bgCanvas.width, bgCanvas.height, 0, 0, logicalW, logicalH);
+    ctx.drawImage(bgCanvas, 0, 0, bgCanvas.width, bgCanvas.height, 0, 0, canvasW, canvasH);
   }
 
-  // Semi-transparent dark overlay
   ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
-  ctx.fillRect(0, 0, logicalW, logicalH);
+  ctx.fillRect(0, 0, canvasW, canvasH);
 
   if (isSelecting) {
-    // Show selection rectangle
-    const rect = {
-      x: Math.min(startX, currentX),
-      y: Math.min(startY, currentY),
-      w: Math.abs(currentX - startX),
-      h: Math.abs(currentY - startY),
-    };
+    const rect = buildPhysicalRect(
+      { x: startX, y: startY },
+      { x: currentX, y: currentY },
+    );
     if (rect.w > 2 && rect.h > 2) {
-      // Draw the un-tinted pre-capture for the selected region (cut a hole in the dark overlay)
-      drawBackground(rect.x, rect.y, rect.w, rect.h);
+      const desktopTopLeft = canvasToDesktopPhysical(rect.x, rect.y);
+      drawBackgroundRegion(desktopTopLeft.x, desktopTopLeft.y, rect.w, rect.h, rect.x, rect.y);
 
       ctx.strokeStyle = "#4CAF50";
       ctx.lineWidth = 2;
       ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
 
-      // Size label (show physical pixel dimensions)
-      const physW = Math.round(rect.w * dpiScale);
-      const physH = Math.round(rect.h * dpiScale);
-      const label = `${physW} x ${physH}`;
+      const label = `${Math.round(rect.w)} x ${Math.round(rect.h)}`;
       ctx.font = "13px monospace";
       const metrics = ctx.measureText(label);
       const labelX = rect.x + rect.w / 2 - metrics.width / 2;
@@ -197,43 +154,35 @@ function draw() {
       ctx.fillText(label, labelX, labelY);
     }
   } else if (hoveredWindow) {
-    // Highlight hovered window - convert physical coords to overlay logical coords
     const w = hoveredWindow;
-    const topLeft = physicalToOverlayLogical(w.x, w.y);
-    const bottomRight = physicalToOverlayLogical(w.x + w.width, w.y + w.height);
-    const logicalWidth = bottomRight.x - topLeft.x;
-    const logicalHeight = bottomRight.y - topLeft.y;
-
-    // Draw the un-tinted pre-capture for the window region
-    drawBackground(topLeft.x, topLeft.y, logicalWidth, logicalHeight);
+    const topLeft = desktopToCanvasPhysical(w.x, w.y);
+    drawBackgroundRegion(w.x, w.y, w.width, w.height, topLeft.x, topLeft.y);
 
     ctx.strokeStyle = "#4CAF50";
     ctx.lineWidth = 2;
-    ctx.strokeRect(topLeft.x, topLeft.y, logicalWidth, logicalHeight);
+    ctx.strokeRect(topLeft.x, topLeft.y, w.width, w.height);
 
-    // Window title label
     const label = `${hoveredWindow.title} (${w.width}x${w.height})`;
     ctx.font = "13px sans-serif";
     const metrics = ctx.measureText(label);
-    const maxWidth = Math.min(metrics.width + 8, logicalWidth);
+    const maxWidth = Math.min(metrics.width + 8, w.width);
     const labelX = topLeft.x + 4;
-    const labelY = topLeft.y > 25 ? topLeft.y - 8 : topLeft.y + logicalHeight + 18;
+    const labelY = topLeft.y > 25 ? topLeft.y - 8 : topLeft.y + w.height + 18;
     ctx.fillStyle = "rgba(0,0,0,0.7)";
     ctx.fillRect(labelX - 4, labelY - 14, maxWidth, 20);
     ctx.fillStyle = "#fff";
-    ctx.fillText(label, labelX, labelY, logicalWidth - 8);
+    ctx.fillText(label, labelX, labelY, w.width - 8);
   }
 
-  // Crosshair - only draw when not selecting (in logical coordinates)
   if (!isSelecting) {
     ctx.strokeStyle = "rgba(255,255,255,0.5)";
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(0, currentY);
-    ctx.lineTo(logicalW, currentY);
+    ctx.lineTo(canvasW, currentY);
     ctx.moveTo(currentX, 0);
-    ctx.lineTo(currentX, logicalH);
+    ctx.lineTo(currentX, canvasH);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -249,20 +198,21 @@ canvas.addEventListener("mousedown", (e) => {
   }
   lastClickTime = now;
 
-  // If hovering a window and just clicking (not dragging), select that window
   isSelecting = true;
-  startX = e.clientX;
-  startY = e.clientY;
-  currentX = e.clientX;
-  currentY = e.clientY;
+  const point = toPhysicalCanvasPoint(e.clientX, e.clientY, dpr);
+  startX = point.x;
+  startY = point.y;
+  currentX = point.x;
+  currentY = point.y;
 });
 
 canvas.addEventListener("mousemove", (e) => {
-  currentX = e.clientX;
-  currentY = e.clientY;
+  const point = toPhysicalCanvasPoint(e.clientX, e.clientY, dpr);
+  currentX = point.x;
+  currentY = point.y;
 
   if (!isSelecting) {
-    hoveredWindow = findWindowAt(currentX, currentY);
+    hoveredWindow = findWindowAtCanvasPoint(currentX, currentY);
   }
 
   draw();
@@ -278,31 +228,24 @@ canvas.addEventListener("mouseup", async () => {
   let captureRect: { x: number; y: number; w: number; h: number };
 
   if (dragW > 5 && dragH > 5) {
-    // User dragged a region - convert logical coords to physical pixels
-    const logicalX = Math.min(startX, currentX);
-    const logicalY = Math.min(startY, currentY);
-    // Convert to physical screen coordinates
-    const { x: physicalX, y: physicalY } = mapOverlayLogicalToPhysical(
-      logicalX,
-      logicalY,
-      monitorOriginX,
-      monitorOriginY,
-      dpiScale,
-      monitorList
+    const canvasRect = buildPhysicalRect(
+      { x: startX, y: startY },
+      { x: currentX, y: currentY },
     );
-    const physicalW = dragW * dpiScale;
-    const physicalH = dragH * dpiScale;
+    const desktopRect = translateCanvasRectToDesktop(canvasRect, {
+      x: resolution.windowOrigin.x,
+      y: resolution.windowOrigin.y,
+    });
+    const selection = toSelectionRect(desktopRect);
 
     captureRect = {
-      x: Math.round(physicalX),
-      y: Math.round(physicalY),
-      w: Math.round(physicalW),
-      h: Math.round(physicalH),
+      x: Math.round(selection.x),
+      y: Math.round(selection.y),
+      w: Math.round(selection.width),
+      h: Math.round(selection.height),
     };
-    console.log("Capture region (logical):", logicalX, logicalY, dragW, dragH);
     console.log("Capture region (physical):", captureRect);
   } else if (hoveredWindow) {
-    // User clicked on a window (no drag) - use physical coords directly
     captureRect = {
       x: hoveredWindow.x,
       y: hoveredWindow.y,
@@ -340,18 +283,14 @@ canvas.addEventListener("mouseup", async () => {
 });
 
 async function captureFullScreen() {
-  // Determine which monitor the cursor is on
-  const physicalX = monitorOriginX + currentX * dpiScale;
-  const physicalY = monitorOriginY + currentY * dpiScale;
+  const desktopPoint = canvasToDesktopPhysical(currentX, currentY);
+  const physicalX = desktopPoint.x as PhysicalPixel;
+  const physicalY = desktopPoint.y as PhysicalPixel;
 
-  let target = monitorList[0];
-  for (const m of monitorList) {
-    if (physicalX >= m.x && physicalX < m.x + m.width &&
-        physicalY >= m.y && physicalY < m.y + m.height) {
-      target = m;
-      break;
-    }
-  }
+  const target = findMonitorAtPoint(
+    { x: physicalX, y: physicalY },
+    resolution.monitors,
+  ) ?? resolution.monitors[0];
 
   if (!target) {
     console.error("No monitor found for cursor position");
@@ -393,3 +332,7 @@ window.addEventListener("keydown", async (e) => {
 });
 
 window.addEventListener("load", init);
+window.addEventListener("resize", () => {
+  dpr = window.devicePixelRatio || 1;
+  init().catch((err) => console.error("Overlay resize init failed:", err));
+});

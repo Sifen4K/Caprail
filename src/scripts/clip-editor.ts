@@ -374,9 +374,9 @@ document.addEventListener("mousemove", (e) => {
 
     case "trim-end": {
       const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
-      const frame = Math.round(ratio * (totalFrames - 1));
+      const frame = Math.round(ratio * (totalFrames - 1)) + 1;
       trimEndFrame = Math.max(frame, trimStartFrame + 1);
-      currentFrame = trimEndFrame;
+      currentFrame = getPlaybackTerminalFrame(trimEndFrame);
       updateTrimUI();
       seekToFrame(currentFrame);
       break;
@@ -402,7 +402,7 @@ function updatePlayhead() {
 function updateTrimUI() {
   if (totalFrames <= 0) return;
   const startRatio = trimStartFrame / (totalFrames - 1);
-  const endRatio = trimEndFrame / (totalFrames - 1);
+  const endRatio = getPlaybackTerminalFrame(trimEndFrame) / (totalFrames - 1);
   trimStartHandle.style.left = `${startRatio * 100}%`;
   trimEndHandle.style.left = `${endRatio * 100}%`;
   trimRegion.style.left = `${startRatio * 100}%`;

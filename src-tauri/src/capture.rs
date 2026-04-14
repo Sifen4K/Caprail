@@ -733,6 +733,30 @@ pub fn save_pin_image(data: Vec<u8>) -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub fn save_rendered_image(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn copy_image_to_clipboard(data: Vec<u8>) -> Result<(), String> {
+    use std::borrow::Cow;
+
+    let rgba = image::load_from_memory(&data)
+        .map_err(|e| format!("Failed to decode image bytes: {}", e))?
+        .into_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width: width as usize,
+            height: height as usize,
+            bytes: Cow::Owned(rgba.into_raw()),
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn read_pin_image(id: u32) -> Result<Response, String> {
     let store = PIN_STORE.read().unwrap();
     let data = store

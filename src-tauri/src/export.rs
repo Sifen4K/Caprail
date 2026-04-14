@@ -22,6 +22,13 @@ pub struct ExportConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PreparedExportConfig {
+    pub config: ExportConfig,
+    pub selected_frame_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExportProgress {
     progress: f64,
     current_frame: u64,
@@ -38,7 +45,12 @@ struct ExportComplete {
 
 #[tauri::command]
 pub fn export_video(app: AppHandle, config: ExportConfig) -> Result<(), String> {
-    if EXPORTING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    let config = normalize_export_config(config)?;
+
+    if EXPORTING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err("Already exporting".to_string());
     }
 
@@ -68,6 +80,17 @@ pub fn export_video(app: AppHandle, config: ExportConfig) -> Result<(), String> 
     Ok(())
 }
 
+#[tauri::command]
+pub fn prepare_export_video(config: ExportConfig) -> Result<PreparedExportConfig, String> {
+    let config = normalize_export_config(config)?;
+    let selected_frame_count = selected_frame_count(&config);
+
+    Ok(PreparedExportConfig {
+        config,
+        selected_frame_count,
+    })
+}
+
 /// Read recording metadata from the in-memory store.
 fn read_recording_meta() -> Result<(u32, u32, u32, usize), String> {
     let store = COMPLETED_RECORDING.read().unwrap();
@@ -77,6 +100,63 @@ fn read_recording_meta() -> Result<(u32, u32, u32, usize), String> {
 
 fn selected_frame_count(config: &ExportConfig) -> u64 {
     (config.end_frame - config.start_frame) as u64
+}
+
+fn normalize_export_config(config: ExportConfig) -> Result<ExportConfig, String> {
+    let (_, _, _, total_frames) = read_recording_meta()?;
+    validate_export_config(config, total_frames as u32)
+}
+
+fn validate_export_config(
+    mut config: ExportConfig,
+    total_frames: u32,
+) -> Result<ExportConfig, String> {
+    if total_frames == 0 {
+        return Err("No recording frames available for export".to_string());
+    }
+
+    if config.output_path.trim().is_empty() {
+        return Err("Output path is required".to_string());
+    }
+
+    if !config.speed.is_finite() || config.speed <= 0.0 {
+        return Err("Playback speed must be greater than 0".to_string());
+    }
+
+    match config.format.as_str() {
+        "mp4" => {
+            config.gif_fps = None;
+            config.gif_max_width = None;
+        }
+        "gif" => {
+            config.gif_fps = Some(config.gif_fps.unwrap_or(15).max(1));
+            config.gif_max_width = Some(config.gif_max_width.unwrap_or(640).max(1));
+        }
+        other => return Err(format!("Unsupported export format: {}", other)),
+    }
+
+    if config.start_frame >= total_frames {
+        return Err(format!(
+            "Start frame {} is out of range for {} total frames",
+            config.start_frame, total_frames
+        ));
+    }
+
+    if config.end_frame == 0 || config.end_frame > total_frames {
+        return Err(format!(
+            "End frame {} is out of range for {} total frames",
+            config.end_frame, total_frames
+        ));
+    }
+
+    if config.end_frame <= config.start_frame {
+        return Err(format!(
+            "End frame {} must be greater than start frame {}",
+            config.end_frame, config.start_frame
+        ));
+    }
+
+    Ok(config)
 }
 
 fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
@@ -90,11 +170,16 @@ fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
 
     let mut args = vec![
         "-y".to_string(),
-        "-f".to_string(), "rawvideo".to_string(),
-        "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", width, height),
-        "-framerate".to_string(), fps.to_string(),
-        "-i".to_string(), "pipe:0".to_string(),
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pixel_format".to_string(),
+        "bgra".to_string(),
+        "-video_size".to_string(),
+        format!("{}x{}", width, height),
+        "-framerate".to_string(),
+        fps.to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
     ];
 
     if !vf_filters.is_empty() {
@@ -102,10 +187,14 @@ fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
     }
 
     args.extend([
-        "-c:v".to_string(), "libx264".to_string(),
-        "-preset".to_string(), "medium".to_string(),
-        "-crf".to_string(), "23".to_string(),
-        "-pix_fmt".to_string(), "yuv420p".to_string(),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "medium".to_string(),
+        "-crf".to_string(),
+        "23".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
         config.output_path.clone(),
     ]);
 
@@ -131,12 +220,18 @@ fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
     // Step 1: Generate palette
     let palette_args = vec![
         "-y".to_string(),
-        "-f".to_string(), "rawvideo".to_string(),
-        "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", width, height),
-        "-framerate".to_string(), fps.to_string(),
-        "-i".to_string(), "pipe:0".to_string(),
-        "-vf".to_string(), format!("{},palettegen", filter),
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pixel_format".to_string(),
+        "bgra".to_string(),
+        "-video_size".to_string(),
+        format!("{}x{}", width, height),
+        "-framerate".to_string(),
+        fps.to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+        "-vf".to_string(),
+        format!("{},palettegen", filter),
         palette_path.clone(),
     ];
 
@@ -145,13 +240,20 @@ fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
     // Step 2: Generate GIF using palette
     let gif_args = vec![
         "-y".to_string(),
-        "-f".to_string(), "rawvideo".to_string(),
-        "-pixel_format".to_string(), "bgra".to_string(),
-        "-video_size".to_string(), format!("{}x{}", width, height),
-        "-framerate".to_string(), fps.to_string(),
-        "-i".to_string(), "pipe:0".to_string(),
-        "-i".to_string(), palette_path.clone(),
-        "-lavfi".to_string(), format!("{} [x]; [x][1:v] paletteuse", filter),
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pixel_format".to_string(),
+        "bgra".to_string(),
+        "-video_size".to_string(),
+        format!("{}x{}", width, height),
+        "-framerate".to_string(),
+        fps.to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+        "-i".to_string(),
+        palette_path.clone(),
+        "-lavfi".to_string(),
+        format!("{} [x]; [x][1:v] paletteuse", filter),
         config.output_path.clone(),
     ];
 
@@ -163,7 +265,7 @@ fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{selected_frame_count, ExportConfig};
+    use super::{selected_frame_count, validate_export_config, ExportConfig};
 
     fn make_config(start_frame: u32, end_frame: u32) -> ExportConfig {
         ExportConfig {
@@ -179,16 +281,53 @@ mod tests {
 
     #[test]
     fn full_selection_should_count_the_last_frame() {
-        let config = make_config(0, 9);
+        let config = make_config(0, 10);
 
         assert_eq!(selected_frame_count(&config), 10);
     }
 
     #[test]
     fn single_frame_selection_should_export_one_frame() {
-        let config = make_config(0, 0);
+        let config = make_config(0, 1);
 
         assert_eq!(selected_frame_count(&config), 1);
+    }
+
+    #[test]
+    fn validate_export_config_applies_gif_defaults() {
+        let config = ExportConfig {
+            output_path: "out.gif".to_string(),
+            start_frame: 0,
+            end_frame: 10,
+            speed: 1.0,
+            format: "gif".to_string(),
+            gif_fps: None,
+            gif_max_width: None,
+        };
+
+        let validated = validate_export_config(config, 10).expect("gif config should validate");
+
+        assert_eq!(validated.gif_fps, Some(15));
+        assert_eq!(validated.gif_max_width, Some(640));
+    }
+
+    #[test]
+    fn validate_export_config_rejects_exclusive_end_out_of_range() {
+        let err = validate_export_config(make_config(0, 11), 10)
+            .expect_err("end frame beyond frame_count should fail");
+
+        assert!(err.contains("End frame 11 is out of range"));
+    }
+
+    #[test]
+    fn validate_export_config_rejects_non_positive_speed() {
+        let mut config = make_config(0, 10);
+        config.speed = 0.0;
+
+        let err =
+            validate_export_config(config, 10).expect_err("zero speed should fail validation");
+
+        assert!(err.contains("Playback speed must be greater than 0"));
     }
 }
 
@@ -212,11 +351,11 @@ fn pipe_frames_to_ffmpeg(
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
 
-    let mut stdin = child.stdin.take()
-        .ok_or("Failed to open ffmpeg stdin")?;
+    let mut stdin = child.stdin.take().ok_or("Failed to open ffmpeg stdin")?;
 
     let progress_range = progress_end - progress_start;
     let mut write_error: Option<String> = None;
@@ -255,7 +394,8 @@ fn pipe_frames_to_ffmpeg(
     drop(stdin);
     drop(store); // Release read lock
 
-    let output = child.wait_with_output()
+    let output = child
+        .wait_with_output()
         .map_err(|e| format!("FFmpeg wait failed: {}", e))?;
 
     if let Some(e) = write_error {

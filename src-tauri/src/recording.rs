@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tauri::ipc::Response;
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
 
 // ── In-memory recording store ────────────────────────────────────────
 // Frames live in RAM until the user exports or closes the editor.
@@ -16,6 +17,19 @@ pub struct RecordingInfo {
     pub frame_count: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingEditorSession {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub frame_count: u32,
+    pub duration_secs: f64,
+    pub trim_start_frame: u32,
+    pub trim_end_frame: u32,
+    pub terminal_frame: u32,
+}
+
 pub struct CompletedRecording {
     pub width: u32,
     pub height: u32,
@@ -25,6 +39,26 @@ pub struct CompletedRecording {
 
 pub static COMPLETED_RECORDING: once_cell::sync::Lazy<RwLock<Option<CompletedRecording>>> =
     once_cell::sync::Lazy::new(|| RwLock::new(None));
+
+fn build_recording_editor_session(rec: &CompletedRecording) -> RecordingEditorSession {
+    let frame_count = rec.frames.len() as u32;
+    let duration_secs = if rec.fps == 0 {
+        0.0
+    } else {
+        frame_count as f64 / rec.fps as f64
+    };
+
+    RecordingEditorSession {
+        width: rec.width,
+        height: rec.height,
+        fps: rec.fps,
+        frame_count,
+        duration_secs,
+        trim_start_frame: 0,
+        trim_end_frame: frame_count,
+        terminal_frame: frame_count.saturating_sub(1),
+    }
+}
 
 #[tauri::command]
 pub fn get_recording_info() -> Result<RecordingInfo, String> {
@@ -36,6 +70,13 @@ pub fn get_recording_info() -> Result<RecordingInfo, String> {
         fps: rec.fps,
         frame_count: rec.frames.len() as u32,
     })
+}
+
+#[tauri::command]
+pub fn get_recording_editor_session() -> Result<RecordingEditorSession, String> {
+    let store = COMPLETED_RECORDING.read().unwrap();
+    let rec = store.as_ref().ok_or("No recording available")?;
+    Ok(build_recording_editor_session(rec))
 }
 
 /// Returns frame pixel data as raw binary (RGBA) via Tauri binary IPC.
@@ -89,6 +130,22 @@ pub struct RecordingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlWindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingWorkflowConfig {
+    pub recording: RecordingConfig,
+    pub control: ControlWindowGeometry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingStatus {
     pub is_recording: bool,
     pub is_paused: bool,
@@ -111,6 +168,200 @@ struct RecordingSession {
     paused: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     frames: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+fn shutdown_recording_session(
+    store_completed: bool,
+) -> Result<Option<RecordingEditorSession>, String> {
+    let mut session_guard = SESSION.lock().unwrap();
+    let mut session = match session_guard.take() {
+        Some(session) => session,
+        None => return Ok(None),
+    };
+
+    session.stop_signal.store(true, Ordering::SeqCst);
+    let capture_handle = session.capture_thread.take();
+
+    // Drop session guard before joining thread to avoid deadlock
+    drop(session_guard);
+
+    if let Some(handle) = capture_handle {
+        let _ = handle.join();
+    }
+
+    let completed_frames = std::mem::take(&mut *session.frames.lock().unwrap());
+    let frame_count = completed_frames.len();
+
+    if store_completed {
+        let completed = CompletedRecording {
+            width: session.width,
+            height: session.height,
+            fps: session.fps,
+            frames: completed_frames,
+        };
+        let editor_session = build_recording_editor_session(&completed);
+
+        *COMPLETED_RECORDING.write().unwrap() = Some(completed);
+
+        tracing::info!(
+            "Recording stopped: {}x{} ({} frames, in-memory)",
+            session.width,
+            session.height,
+            frame_count
+        );
+
+        Ok(Some(editor_session))
+    } else {
+        *COMPLETED_RECORDING.write().unwrap() = None;
+
+        tracing::info!(
+            "Recording aborted: {}x{} (discarded {} frames)",
+            session.width,
+            session.height,
+            frame_count
+        );
+
+        Ok(None)
+    }
+}
+
+async fn close_window_if_exists(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.close();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn build_recording_window(
+    app: &tauri::AppHandle,
+    label: &str,
+    url: &str,
+    title: &str,
+    visible: bool,
+) -> Result<tauri::WebviewWindow, String> {
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(100.0, 100.0)
+        .position(0.0, 0.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(visible)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn start_recording_workflow(
+    app: tauri::AppHandle,
+    workflow: RecordingWorkflowConfig,
+) -> Result<(), String> {
+    close_window_if_exists(&app, "record-indicator").await;
+    close_window_if_exists(&app, "record-control").await;
+    if let Some(window) = app.get_webview_window("clip-editor") {
+        if window.is_visible().map_err(|e| e.to_string())? {
+            return Err("Recording editor is already open".to_string());
+        }
+        let _ = window.close();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let clip_editor = WebviewWindowBuilder::new(
+        &app,
+        "clip-editor",
+        WebviewUrl::App("src/clip-editor.html".into()),
+    )
+    .title("Recording Editor")
+    .inner_size(900.0, 650.0)
+    .center()
+    .resizable(true)
+    .visible(false)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    let indicator = match build_recording_window(
+        &app,
+        "record-indicator",
+        "src/record-indicator.html",
+        "Recording Indicator",
+        true,
+    ) {
+        Ok(window) => window,
+        Err(err) => {
+            let _ = clip_editor.close();
+            return Err(err);
+        }
+    };
+
+    let mut recording_started = false;
+    let setup_result = async {
+        indicator
+            .set_size(PhysicalSize::new(
+                workflow.recording.width.max(1) as u32,
+                workflow.recording.height.max(1) as u32,
+            ))
+            .map_err(|e| e.to_string())?;
+        indicator
+            .set_position(PhysicalPosition::new(
+                workflow.recording.x,
+                workflow.recording.y,
+            ))
+            .map_err(|e| e.to_string())?;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        crate::capture::lock_window_position(app.clone(), "record-indicator".to_string())?;
+        crate::capture::set_window_exclude_from_capture(
+            app.clone(),
+            "record-indicator".to_string(),
+        )?;
+        indicator
+            .set_ignore_cursor_events(true)
+            .map_err(|e| e.to_string())?;
+
+        start_recording(workflow.recording.clone())?;
+        recording_started = true;
+
+        let control = build_recording_window(
+            &app,
+            "record-control",
+            "src/record-control.html",
+            "Recording",
+            true,
+        )?;
+        control
+            .set_size(PhysicalSize::new(
+                workflow.control.width.max(1),
+                workflow.control.height.max(1),
+            ))
+            .map_err(|e| e.to_string())?;
+        control
+            .set_position(PhysicalPosition::new(workflow.control.x, workflow.control.y))
+            .map_err(|e| e.to_string())?;
+        crate::capture::set_window_exclude_from_capture(
+            app.clone(),
+            "record-control".to_string(),
+        )?;
+
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(err) = setup_result {
+        let _ = app.emit("recording-cancelled", ());
+        let _ = app.get_webview_window("record-control").map(|window| window.close());
+        let _ = indicator.close();
+        let _ = clip_editor.close();
+        if recording_started {
+            let _ = shutdown_recording_session(false);
+        } else {
+            let _ = cleanup_recording();
+        }
+        return Err(err);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -165,7 +416,12 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
 
     *session_guard = Some(session);
 
-    tracing::info!("Recording started (in-memory): {}x{} @ {}fps", width, height, fps);
+    tracing::info!(
+        "Recording started (in-memory): {}x{} @ {}fps",
+        width,
+        height,
+        fps
+    );
     Ok(())
 }
 
@@ -178,9 +434,9 @@ fn capture_loop(
     frames: Arc<Mutex<Vec<Vec<u8>>>>,
 ) {
     use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-        GetDC, GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-        BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        SRCCOPY,
     };
 
     let frame_duration = std::time::Duration::from_secs_f64(1.0 / config.fps as f64);
@@ -217,8 +473,15 @@ fn capture_loop(
             let mut frame = vec![0u8; frame_size];
 
             let _ = BitBlt(
-                hdc_mem, 0, 0, config.width, config.height,
-                Some(hdc_screen), config.x, config.y, SRCCOPY,
+                hdc_mem,
+                0,
+                0,
+                config.width,
+                config.height,
+                Some(hdc_screen),
+                config.x,
+                config.y,
+                SRCCOPY,
             );
 
             GetDIBits(
@@ -263,36 +526,11 @@ fn capture_loop(
 }
 
 #[tauri::command]
-pub fn stop_recording() -> Result<(), String> {
-    let mut session_guard = SESSION.lock().unwrap();
-    let mut session = session_guard.take().ok_or("Not recording".to_string())?;
-
-    session.stop_signal.store(true, Ordering::SeqCst);
-    let capture_handle = session.capture_thread.take();
-
-    // Drop session guard before joining thread to avoid deadlock
-    drop(session_guard);
-
-    if let Some(handle) = capture_handle {
-        let _ = handle.join();
-    }
-
-    // Capture thread dropped its Arc clone on exit — lock and take frames
-    let completed_frames = std::mem::take(&mut *session.frames.lock().unwrap());
-    let frame_count = completed_frames.len();
-
-    *COMPLETED_RECORDING.write().unwrap() = Some(CompletedRecording {
-        width: session.width,
-        height: session.height,
-        fps: session.fps,
-        frames: completed_frames,
-    });
-
-    tracing::info!(
-        "Recording stopped: {}x{} ({} frames, in-memory)",
-        session.width, session.height, frame_count
-    );
-    Ok(())
+pub fn stop_recording(app: tauri::AppHandle) -> Result<RecordingEditorSession, String> {
+    let editor_session = shutdown_recording_session(true)?
+        .ok_or("Not recording".to_string())?;
+    let _ = app.emit("recording-stopped", &editor_session);
+    Ok(editor_session)
 }
 
 #[tauri::command]
@@ -369,5 +607,43 @@ pub fn get_recording_status() -> RecordingStatus {
                 fps,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_recording_editor_session, CompletedRecording};
+
+    #[test]
+    fn recording_editor_session_uses_exclusive_trim_end() {
+        let recording = CompletedRecording {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            frames: vec![vec![0; 4]; 10],
+        };
+
+        let session = build_recording_editor_session(&recording);
+
+        assert_eq!(session.trim_start_frame, 0);
+        assert_eq!(session.trim_end_frame, 10);
+        assert_eq!(session.terminal_frame, 9);
+        assert!((session.duration_secs - (10.0 / 30.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn empty_recording_session_clamps_terminal_frame() {
+        let recording = CompletedRecording {
+            width: 1,
+            height: 1,
+            fps: 30,
+            frames: Vec::new(),
+        };
+
+        let session = build_recording_editor_session(&recording);
+
+        assert_eq!(session.trim_end_frame, 0);
+        assert_eq!(session.terminal_frame, 0);
+        assert_eq!(session.duration_secs, 0.0);
     }
 }

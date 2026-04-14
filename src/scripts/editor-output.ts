@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import type { EditorState } from "./editor-types";
 
 function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob | null> {
@@ -10,14 +8,19 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob | n
   });
 }
 
+async function blobToNumberArray(blob: Blob): Promise<number[]> {
+  const arrayBuffer = await blob.arrayBuffer();
+  return Array.from(new Uint8Array(arrayBuffer));
+}
+
 export async function copyToClipboard(state: EditorState, redrawAll: () => void) {
   redrawAll();
-  const blob = await canvasToBlob(state.canvas, "png");
+  const blob = await canvasToBlob(state.canvas, "image/png");
   if (blob) {
-    const arrayBuffer = await blob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
     try {
-      await writeImage(uint8Array);
+      await invoke("copy_image_to_clipboard", {
+        data: await blobToNumberArray(blob),
+      });
     } catch (err) {
       console.error("Copy failed:", err);
     }
@@ -42,8 +45,10 @@ export async function saveToFile(state: EditorState, redrawAll: () => void) {
     const mimeType = ext === "jpg" ? "image/jpeg" : "image/png";
     const blob = await canvasToBlob(state.canvas, mimeType);
     if (blob) {
-      const arrayBuffer = await blob.arrayBuffer();
-      await writeFile(filePath, new Uint8Array(arrayBuffer));
+      await invoke("save_rendered_image", {
+        path: filePath,
+        data: await blobToNumberArray(blob),
+      });
     }
   }
 }
@@ -53,11 +58,9 @@ export async function pinToScreen(state: EditorState, redrawAll: () => void) {
   redrawAll();
   const blob = await canvasToBlob(state.canvas, "image/png");
   if (blob) {
-    const arrayBuffer = await blob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
     // Store image in Rust backend and get an ID
     const pinId = await invoke<number>("save_pin_image", {
-      data: Array.from(uint8Array),
+      data: await blobToNumberArray(blob),
     });
     const { emit } = await import("@tauri-apps/api/event");
     await emit("pin-screenshot", {
@@ -68,8 +71,8 @@ export async function pinToScreen(state: EditorState, redrawAll: () => void) {
   }
 }
 
-export async function performOcr(state: EditorState) {
-  if (!state.baseImageData) return;
+export async function performOcr(screenshotId: number | null) {
+  if (screenshotId === null) return;
 
   const ocrPanel = document.getElementById("ocr-panel")!;
   const ocrText = document.getElementById("ocr-text") as HTMLTextAreaElement;
@@ -84,10 +87,8 @@ export async function performOcr(state: EditorState) {
   ocrText.value = "Recognizing...";
 
   try {
-    const result = await invoke<{ text: string; regions: unknown[] }>("ocr_recognize", {
-      imageData: Array.from(state.baseImageData.data),
-      width: state.baseImageData.width,
-      height: state.baseImageData.height,
+    const result = await invoke<{ text: string; regions: unknown[] }>("ocr_recognize_screenshot", {
+      id: screenshotId,
     });
     ocrText.value = result.text || "(No text found)";
   } catch (err) {

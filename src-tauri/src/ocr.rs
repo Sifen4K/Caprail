@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
+use crate::capture::SCREENSHOT_STORE;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
     pub text: String,
@@ -22,6 +24,29 @@ pub struct OcrRegion {
 /// If PaddleOCR CLI is not available, falls back to Windows OCR (WinRT).
 #[tauri::command]
 pub fn ocr_recognize(
+    image_data: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Result<OcrResult, String> {
+    ocr_recognize_rgba(image_data, width, height)
+}
+
+#[tauri::command]
+pub fn ocr_recognize_screenshot(id: u32) -> Result<OcrResult, String> {
+    let store = SCREENSHOT_STORE.read().unwrap();
+    let screenshot = store
+        .get(&id)
+        .ok_or_else(|| format!("No screenshot with id {}", id))?;
+
+    let mut rgba = screenshot.data.clone();
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+
+    ocr_recognize_rgba(rgba, screenshot.width, screenshot.height)
+}
+
+fn ocr_recognize_rgba(
     image_data: Vec<u8>,
     width: u32,
     height: u32,

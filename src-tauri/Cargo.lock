@@ -516,6 +516,7 @@ dependencies = [
 name = "caprail"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "dirs 5.0.1",
  "image",
  "once_cell",

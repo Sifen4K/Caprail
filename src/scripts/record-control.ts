@@ -1,6 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
 import { PhysicalPosition } from "@tauri-apps/api/window";
 import { computeDraggedPhysicalPosition } from "./physical-capture.logic";
 
@@ -92,7 +91,6 @@ stopBtn.addEventListener("click", async () => {
   clearInterval(statusInterval);
   try {
     await invoke("stop_recording");
-    await emit("recording-stopped", {});
   } catch (err) {
     console.error("Stop recording failed:", err);
   }

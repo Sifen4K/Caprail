@@ -2,11 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
-  buildInitialClipEditorState,
   buildTimelineGeometry,
-  createClipEditorSession,
   getPlaybackTerminalFrame,
-  prepareExportRequest,
   resolvePlaybackStartFrame,
   resolvePlayheadLeft,
   resolveTrimLayout,
@@ -69,16 +66,20 @@ async function loadRecording() {
       height: number;
       fps: number;
       frameCount: number;
-    }>("get_recording_info");
+      durationSecs: number;
+      trimStartFrame: number;
+      trimEndFrame: number;
+      terminalFrame: number;
+    }>("get_recording_editor_session");
 
     videoWidth = info.width;
     videoHeight = info.height;
     fps = info.fps;
     totalFrames = info.frameCount;
-    const clipState = buildInitialClipEditorState(totalFrames, fps);
-    duration = clipState.duration;
-    trimStartFrame = clipState.trimStartFrame;
-    trimEndFrame = clipState.trimEndFrame;
+    duration = info.durationSecs;
+    trimStartFrame = info.trimStartFrame;
+    trimEndFrame = info.trimEndFrame;
+    currentFrame = Math.min(currentFrame, info.terminalFrame);
 
     canvas.width = videoWidth;
     canvas.height = videoHeight;
@@ -86,7 +87,7 @@ async function loadRecording() {
     updateTimeDisplay();
     updateTrimUI();
 
-    fetchAndRender(0);
+    fetchAndRender(trimStartFrame);
   } catch (err) {
     console.error("Failed to load recording info:", err);
   }
@@ -94,7 +95,7 @@ async function loadRecording() {
 
 // Try loading immediately (works if window created after recording stopped).
 // If recording data isn't ready yet (pre-created window), wait for signal.
-invoke("get_recording_info")
+invoke("get_recording_editor_session")
   .then(() => loadRecording())
   .catch(() => {
     listen("recording-data-ready", () => loadRecording());
@@ -563,12 +564,30 @@ async function doExport(format: "mp4" | "gif") {
   );
 
   try {
-    const session = createClipEditorSession(totalFrames, fps);
-    session.selection.startFrame = trimStartFrame;
-    session.selection.endFrame = trimEndFrame;
-    const config = prepareExportRequest(session, outputPath, playbackSpeed, format);
+    const prepared = await invoke<{
+      config: {
+        outputPath: string;
+        startFrame: number;
+        endFrame: number;
+        speed: number;
+        format: "mp4" | "gif";
+        gifFps: number | null;
+        gifMaxWidth: number | null;
+      };
+      selectedFrameCount: number;
+    }>("prepare_export_video", {
+      config: {
+        outputPath,
+        startFrame: trimStartFrame,
+        endFrame: trimEndFrame,
+        speed: playbackSpeed,
+        format,
+        gifFps: format === "gif" ? 15 : null,
+        gifMaxWidth: format === "gif" ? 640 : null,
+      },
+    });
     await invoke("export_video", {
-      config,
+      config: prepared.config,
     });
   } catch (err) {
     console.error("Export invocation failed:", err);

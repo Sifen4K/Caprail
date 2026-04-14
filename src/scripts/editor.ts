@@ -166,7 +166,7 @@ document.getElementById("redo-btn")!.addEventListener("click", () => redo(state,
 document.getElementById("copy-btn")!.addEventListener("click", () => copyToClipboard(state, redraw));
 document.getElementById("save-btn")!.addEventListener("click", () => saveToFile(state, redraw));
 document.getElementById("pin-btn")!.addEventListener("click", () => pinToScreen(state, redraw));
-document.getElementById("ocr-btn")!.addEventListener("click", () => performOcr(state));
+document.getElementById("ocr-btn")!.addEventListener("click", () => performOcr(screenshotId));
 
 // OCR panel
 document.getElementById("ocr-close-btn")!.addEventListener("click", () => {

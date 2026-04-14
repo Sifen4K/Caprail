@@ -75,10 +75,34 @@ pub fn run() {
                     let menu = tauri::menu::Menu::with_items(
                         app,
                         &[
-                            &tauri::menu::MenuItem::with_id(app, "screenshot", &cfg.tray_menu_screenshot, true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "record", &cfg.tray_menu_record, true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "settings", &cfg.tray_menu_settings, true, None::<&str>)?,
-                            &tauri::menu::MenuItem::with_id(app, "quit", &cfg.tray_menu_quit, true, None::<&str>)?,
+                            &tauri::menu::MenuItem::with_id(
+                                app,
+                                "screenshot",
+                                &cfg.tray_menu_screenshot,
+                                true,
+                                None::<&str>,
+                            )?,
+                            &tauri::menu::MenuItem::with_id(
+                                app,
+                                "record",
+                                &cfg.tray_menu_record,
+                                true,
+                                None::<&str>,
+                            )?,
+                            &tauri::menu::MenuItem::with_id(
+                                app,
+                                "settings",
+                                &cfg.tray_menu_settings,
+                                true,
+                                None::<&str>,
+                            )?,
+                            &tauri::menu::MenuItem::with_id(
+                                app,
+                                "quit",
+                                &cfg.tray_menu_quit,
+                                true,
+                                None::<&str>,
+                            )?,
                         ],
                     )?;
                     let _ = tray.set_menu(Some(menu));
@@ -111,7 +135,9 @@ pub fn run() {
                     info!("Tray menu setup complete");
                 }
                 None => {
-                    error!("Tray icon 'main-tray' not found! Check tauri.conf.json trayIcon config.");
+                    error!(
+                        "Tray icon 'main-tray' not found! Check tauri.conf.json trayIcon config."
+                    );
                 }
             }
 
@@ -133,18 +159,24 @@ pub fn run() {
             capture::cleanup_screenshot,
             capture::set_window_exclude_from_capture,
             capture::save_pin_image,
+            capture::save_rendered_image,
+            capture::copy_image_to_clipboard,
             capture::read_pin_image,
             capture::cleanup_pin_image,
             recording::start_recording,
+            recording::start_recording_workflow,
             recording::stop_recording,
             recording::pause_recording,
             recording::resume_recording,
             recording::get_recording_status,
             recording::get_recording_info,
+            recording::get_recording_editor_session,
             recording::read_recording_frame,
             recording::cleanup_recording,
+            export::prepare_export_video,
             export::export_video,
             ocr::ocr_recognize,
+            ocr::ocr_recognize_screenshot,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

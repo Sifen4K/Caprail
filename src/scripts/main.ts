@@ -17,27 +17,6 @@ function updateStatus(msg: string) {
   status.textContent = msg;
 }
 
-/**
- * Exclude a window from screen capture using SetWindowDisplayAffinity.
- * Retries up to `maxRetries` times with increasing delay on failure.
- */
-async function excludeWindowFromCapture(label: string, maxRetries: number): Promise<void> {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      await invoke("set_window_exclude_from_capture", { label });
-      console.log(`Window '${label}' excluded from capture (attempt ${i + 1})`);
-      return;
-    } catch (e) {
-      console.warn(`Failed to exclude '${label}' (attempt ${i + 1}/${maxRetries}):`, e);
-      if (i < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, 100 * (i + 1)));
-      } else {
-        console.error(`Failed to exclude '${label}' from capture after ${maxRetries} retries`);
-      }
-    }
-  }
-}
-
 // Convert "Ctrl+Shift+A" to "CommandOrControl+Shift+A" for Tauri
 function toTauriShortcut(shortcut: string): string {
   return shortcut.replace(/Ctrl/gi, "CommandOrControl");
@@ -139,7 +118,6 @@ async function openEditorWindow(data: { id: number; width: number; height: numbe
 }
 
 let pinCounter = 0;
-let preCreatedClipEditor: WebviewWindow | null = null;
 
 async function openPinWindow(data: { id: number; width: number; height: number }) {
   // Pinned to screen — allow shortcuts again
@@ -178,24 +156,23 @@ async function openPinWindow(data: { id: number; width: number; height: number }
 
 async function showClipEditor() {
   isCapturing = false;
+  const clipEditor = await WebviewWindow.getByLabel("clip-editor");
 
-  if (preCreatedClipEditor) {
-    // Window already pre-created during recording — just show it
-    await preCreatedClipEditor.show();
-    await preCreatedClipEditor.center();
+  if (clipEditor) {
+    await clipEditor.show();
+    await clipEditor.center();
     await emit("recording-data-ready", {});
-  } else {
-    // Fallback: create window on the spot
-    preCreatedClipEditor = new WebviewWindow("clip-editor", {
-      url: `src/clip-editor.html`,
-      width: 900,
-      height: 650,
-      center: true,
-      title: "Recording Editor",
-      resizable: true,
-    });
-    // Data is already in memory, editor will load on init
+    return;
   }
+
+  new WebviewWindow("clip-editor", {
+    url: "src/clip-editor.html",
+    width: 900,
+    height: 650,
+    center: true,
+    title: "Recording Editor",
+    resizable: true,
+  });
 }
 
 async function setup() {
@@ -289,139 +266,15 @@ async function setup() {
           desktopBounds,
           controlScale,
         );
-
-        // Pre-create clip editor window (hidden) to warm up WebView2
-        preCreatedClipEditor = new WebviewWindow("clip-editor", {
-          url: "src/clip-editor.html",
-          width: 900,
-          height: 650,
-          center: true,
-          title: "Recording Editor",
-          resizable: true,
-          visible: false,
-        });
-        preCreatedClipEditor.once("tauri://destroyed", () => {
-          preCreatedClipEditor = null;
-        });
-        preCreatedClipEditor.once("tauri://error", (error) => {
-          console.error("Clip editor window creation failed:", error);
-          preCreatedClipEditor = null;
-        });
-
-        // Create the record-indicator overlay window to show green border
-        // around the selected recording area. The window is excluded from
-        // screen capture via SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)
-        // with robust retry and verification logic in Rust.
-        // We MUST wait for the exclusion to complete before starting recording,
-        // otherwise the green border will appear in the captured video.
-        const indicatorWindow = new WebviewWindow("record-indicator", {
-          url: "src/record-indicator.html",
-          width: 100,
-          height: 100,
-          x: 0,
-          y: 0,
-          decorations: false,
-          transparent: true,
-          shadow: false,
-          alwaysOnTop: true,
-          skipTaskbar: true,
-          resizable: false,
-          title: "Recording Indicator",
-        });
-
-        // Wait for indicator window to be created AND excluded from capture
-        // before starting recording, so the green border never appears in the video.
-        await new Promise<void>((resolve) => {
-          let resolved = false;
-          const safeResolve = () => {
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
-          };
-
-          // Safety timeout: if tauri://created never fires, resolve anyway
-          // so recording can still proceed (indicator may appear in capture briefly).
-          const timeout = setTimeout(() => {
-            console.warn("Indicator window creation timed out, proceeding with recording");
-            safeResolve();
-          }, 5000);
-
-          indicatorWindow.once("tauri://error", (e) => {
-            clearTimeout(timeout);
-            console.warn("Indicator window creation failed, proceeding with recording:", e);
-            safeResolve();
-          });
-
-          indicatorWindow.once("tauri://created", async () => {
-            try {
-              await indicatorWindow.setSize(new PhysicalSize(Math.round(width), Math.round(height)));
-              await indicatorWindow.setPosition(new PhysicalPosition(Math.round(x), Math.round(y)));
-            } catch (geometryError) {
-              console.warn("Failed to apply indicator physical geometry:", geometryError);
-            }
-            // Small delay to ensure the window is fully initialized by the OS
-            await new Promise(r => setTimeout(r, 100));
-            // Compensate for any invisible frame offset so the green border
-            // aligns exactly with the recording region on screen
-            try {
-              await invoke("lock_window_position", { label: "record-indicator" });
-            } catch (e) {
-              console.warn("Failed to lock indicator window position:", e);
-            }
-            await excludeWindowFromCapture("record-indicator", 5);
-            clearTimeout(timeout);
-            safeResolve();
-          });
-        });
-
-        // Now start recording — green indicator is already excluded from capture
-        await invoke("start_recording", {
-          config: { x, y, width, height, fps: 30 },
-        });
-
-        // Open recording control bar below the selected area
-        const controlWindow = new WebviewWindow("record-control", {
-          url: "src/record-control.html",
-          width: 100,
-          height: 100,
-          x: 0,
-          y: 0,
-          decorations: false,
-          transparent: true,
-          shadow: false,
-          alwaysOnTop: true,
-          skipTaskbar: true,
-          resizable: false,
-          title: "Recording",
-        });
-        // Exclude control bar from screen capture with retry for robustness
-        controlWindow.once("tauri://created", async () => {
-          try {
-            await controlWindow.setSize(new PhysicalSize(controlRect.width, controlRect.height));
-            await controlWindow.setPosition(new PhysicalPosition(controlRect.x, controlRect.y));
-          } catch (geometryError) {
-            console.warn("Failed to apply control window physical geometry:", geometryError);
-          }
-          await excludeWindowFromCapture("record-control", 3);
+        await invoke("start_recording_workflow", {
+          workflow: {
+            recording: { x, y, width, height, fps: 30 },
+            control: controlRect,
+          },
         });
       } catch (err) {
         updateStatus(`Recording error: ${err}`);
         isCapturing = false;
-
-        // Clean up indicator window
-        try {
-          const indicator = await WebviewWindow.getByLabel("record-indicator");
-          if (indicator) await indicator.close();
-        } catch {}
-
-        // Clean up pre-created clip editor window
-        if (preCreatedClipEditor) {
-          try {
-            await preCreatedClipEditor.close();
-            preCreatedClipEditor = null;
-          } catch {}
-        }
       }
     }
   );

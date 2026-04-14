@@ -25,7 +25,7 @@
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| identifier 格式 | `com.caprail.app` | 标准 reverse-DNS 格式，简洁 |
+| identifier 格式 | `com.caprail.desktop` | 标准 reverse-DNS 格式，并避免与 macOS `.app` 扩展冲突 |
 | Cargo lib 名 | `caprail_lib` | 与包名一致，符合 Rust snake_case 约定 |
 | 用户配置迁移 | 不处理 | 开源首发，无历史用户负担；简化实现 |
 | UI 状态消息 | 保持功能性描述 | 如 "Caprail: capturing..." 而非纯品牌名 |

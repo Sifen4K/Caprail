@@ -46,6 +46,18 @@ let dpr = 1;
 // Offscreen canvas holding the pre-captured virtual screen image
 let bgCanvas: HTMLCanvasElement | null = null;
 
+async function cancelCapture() {
+  try {
+    await invoke("cleanup_screenshot", { id: precaptureId });
+  } catch (err) {
+    console.error("Cleanup failed:", err);
+  }
+
+  await emit("screenshot-cancelled", {});
+  const win = getCurrentWindow();
+  await win.close();
+}
+
 async function init() {
   // Lock window position to prevent dragging
   try {
@@ -189,6 +201,19 @@ function draw() {
 }
 
 canvas.addEventListener("mousedown", (e) => {
+  if (e.button === 2 && isSelecting && (e.buttons & 1) === 1) {
+    e.preventDefault();
+    isSelecting = false;
+    hoveredWindow = null;
+    draw();
+    void cancelCapture();
+    return;
+  }
+
+  if (e.button !== 0) {
+    return;
+  }
+
   const now = Date.now();
 
   // Double-click: capture full screen
@@ -218,8 +243,8 @@ canvas.addEventListener("mousemove", (e) => {
   draw();
 });
 
-canvas.addEventListener("mouseup", async () => {
-  if (!isSelecting) return;
+canvas.addEventListener("mouseup", async (e) => {
+  if (e.button !== 0 || !isSelecting) return;
   isSelecting = false;
 
   const dragW = Math.abs(currentX - startX);
@@ -282,6 +307,10 @@ canvas.addEventListener("mouseup", async () => {
   await win.close();
 });
 
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+});
+
 async function captureFullScreen() {
   const desktopPoint = canvasToDesktopPhysical(currentX, currentY);
   const physicalX = desktopPoint.x as PhysicalPixel;
@@ -323,11 +352,7 @@ async function captureFullScreen() {
 
 window.addEventListener("keydown", async (e) => {
   if (e.key === "Escape") {
-    // Clean up pre-capture before closing
-    await invoke("cleanup_screenshot", { id: precaptureId });
-    await emit("screenshot-cancelled", {});
-    const win = getCurrentWindow();
-    await win.close();
+    await cancelCapture();
   }
 });
 

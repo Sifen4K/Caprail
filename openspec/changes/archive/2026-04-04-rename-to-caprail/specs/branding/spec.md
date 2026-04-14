@@ -14,7 +14,7 @@
 
 #### Scenario: Tauri 配置正确
 - **WHEN** 查看 tauri.conf.json
-- **THEN** productName 为 "Caprail"，identifier 为 "com.caprail.app"，window title 为 "Caprail"
+- **THEN** productName 为 "Caprail"，identifier 为 "com.caprail.desktop"，window title 为 "Caprail"
 
 ### Requirement: 内部路径使用新名称
 

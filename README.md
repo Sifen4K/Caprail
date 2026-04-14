@@ -27,6 +27,14 @@ A screenshot and screen recording tool for Windows. / [中文](#用户手册) / 
 
 Customizable in Settings.
 
+### Screenshot Controls
+
+- Left click and drag to select a capture region
+- Release the left button to confirm the region capture
+- Double-click to capture the full monitor under the cursor
+- Press `Esc` to cancel
+- While dragging with the left button still held, press the right button to cancel the current screenshot
+
 ### Installation
 
 #### Required
@@ -171,6 +179,14 @@ Caprail/
 | 录屏 | `Ctrl+Shift+R` |
 
 可在设置页面自定义。
+
+### 截图操作
+
+- 按住左键拖动以框选截图区域
+- 松开左键后确认区域截图
+- 双击可截取鼠标所在显示器的整屏
+- 按 `Esc` 取消截图
+- 在按住左键拖动框选时按下右键，可取消当前这次截图
 
 ### 安装依赖
 

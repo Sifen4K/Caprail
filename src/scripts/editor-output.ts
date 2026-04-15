@@ -2,6 +2,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { EditorState } from "./editor-types";
 
+type OcrPanelState = {
+  requestId: number;
+  screenshotId: number | null;
+  status: "idle" | "running" | "done" | "error";
+  text: string;
+};
+
+let ocrRequestId = 0;
+const ocrState: OcrPanelState = {
+  requestId: 0,
+  screenshotId: null,
+  status: "idle",
+  text: "",
+};
+
 function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob | null> {
   return new Promise((resolve) => {
     canvas.toBlob((blob) => resolve(blob), type, 0.95);
@@ -84,14 +99,47 @@ export async function performOcr(screenshotId: number | null) {
   }
 
   ocrPanel.style.display = "flex";
-  ocrText.value = "Recognizing...";
+
+  if (
+    ocrState.screenshotId === screenshotId &&
+    (ocrState.status === "running" || ocrState.status === "done")
+  ) {
+    ocrText.value = ocrState.text;
+    return;
+  }
+
+  const requestId = ++ocrRequestId;
+  ocrState.requestId = requestId;
+  ocrState.screenshotId = screenshotId;
+  ocrState.status = "running";
+  ocrState.text = "Recognizing...";
+  ocrText.value = ocrState.text;
 
   try {
     const result = await invoke<{ text: string; regions: unknown[] }>("ocr_recognize_screenshot", {
       id: screenshotId,
     });
-    ocrText.value = result.text || "(No text found)";
+    if (ocrState.requestId !== requestId) {
+      return;
+    }
+    ocrState.status = "done";
+    ocrState.text = result.text || "(No text found)";
+    if (ocrPanel.style.display !== "none") {
+      ocrText.value = ocrState.text;
+    }
   } catch (err) {
-    ocrText.value = `OCR error: ${err}`;
+    if (ocrState.requestId !== requestId) {
+      return;
+    }
+    ocrState.status = "error";
+    ocrState.text = `OCR error: ${err}`;
+    if (ocrPanel.style.display !== "none") {
+      ocrText.value = ocrState.text;
+    }
   }
+}
+
+export function closeOcrPanel() {
+  const ocrPanel = document.getElementById("ocr-panel")!;
+  ocrPanel.style.display = "none";
 }

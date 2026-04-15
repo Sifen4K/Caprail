@@ -4,7 +4,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import type { ToolType, StampType, EditorState } from "./editor-types";
 import { redrawAll, setupCanvasHandlers, bakeBuffer } from "./editor-canvas";
 import { undo, redo } from "./editor-history";
-import { copyToClipboard, saveToFile, pinToScreen, performOcr } from "./editor-output";
+import { copyToClipboard, saveToFile, pinToScreen, performOcr, closeOcrPanel } from "./editor-output";
 import { handleWheel, startPan, endPan, applyZoomTransform } from "./editor-zoom";
 
 // --- State ---
@@ -170,7 +170,7 @@ document.getElementById("ocr-btn")!.addEventListener("click", () => performOcr(s
 
 // OCR panel
 document.getElementById("ocr-close-btn")!.addEventListener("click", () => {
-  document.getElementById("ocr-panel")!.style.display = "none";
+  closeOcrPanel();
 });
 
 document.getElementById("ocr-copy-btn")!.addEventListener("click", async () => {

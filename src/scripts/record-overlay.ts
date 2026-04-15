@@ -6,6 +6,7 @@ import type { PhysicalPixel } from "./resolution-context";
 import { loadLocale, t } from "./i18n.ts";
 import {
   buildPhysicalRect,
+  shouldCancelOverlayOnRightClick,
   toPhysicalCanvasPoint,
   toSelectionRect,
   translateCanvasRectToDesktop,
@@ -22,6 +23,13 @@ let startY = 0;
 let currentX = 0;
 let currentY = 0;
 // (originPhysX/Y and monitors variables removed — use resolution context instead)
+
+async function cancelRecordingSelection() {
+  isSelecting = false;
+  await emit("recording-cancelled", {});
+  const win = getCurrentWindow();
+  await win.close();
+}
 
 async function resize() {
   // Lock window position and compensate for any invisible frame offset.
@@ -120,6 +128,16 @@ function draw() {
 }
 
 canvas.addEventListener("mousedown", (e) => {
+  if (shouldCancelOverlayOnRightClick(isSelecting, e.button, e.buttons)) {
+    e.preventDefault();
+    void cancelRecordingSelection();
+    return;
+  }
+
+  if (e.button !== 0) {
+    return;
+  }
+
   isSelecting = true;
   const point = toPhysicalCanvasPoint(e.clientX, e.clientY, dpr);
   startX = point.x;
@@ -162,18 +180,18 @@ canvas.addEventListener("mouseup", async () => {
     // its destruction before starting the recording, avoiding the race
     // condition where the red overlay border appears in captured frames.
   } else {
-    await emit("recording-cancelled", {});
-    const win = getCurrentWindow();
-    await win.close();
+    await cancelRecordingSelection();
   }
 });
 
 window.addEventListener("keydown", async (e) => {
   if (e.key === "Escape") {
-    await emit("recording-cancelled", {});
-    const win = getCurrentWindow();
-    await win.close();
+    await cancelRecordingSelection();
   }
+});
+
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
 });
 
 window.addEventListener("load", resize);

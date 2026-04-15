@@ -171,3 +171,18 @@ export function computeDraggedPhysicalPosition(
   };
 }
 
+export function shouldCancelOverlayOnRightClick(
+  isSelecting: boolean,
+  button: number,
+  buttons: number,
+): boolean {
+  if (button !== 2) {
+    return false;
+  }
+
+  if (!isSelecting) {
+    return true;
+  }
+
+  return (buttons & 1) === 1;
+}

@@ -6,6 +6,7 @@ import {
   computeDraggedPhysicalPosition,
   findMonitorAtPoint,
   findSmallestWindowAtPoint,
+  shouldCancelOverlayOnRightClick,
   toPhysicalCanvasPoint,
   toSelectionRect,
   translateCanvasRectToDesktop,
@@ -118,5 +119,12 @@ describe("physical capture geometry", () => {
     expect(control.width).toBe(330);
     expect(control.height).toBe(78);
     expect(control.y).toBe(selection.y + selection.height + 15);
+  });
+
+  it("treats right click as overlay cancel before selection starts and while a drag is active", () => {
+    expect(shouldCancelOverlayOnRightClick(false, 2, 2)).toBe(true);
+    expect(shouldCancelOverlayOnRightClick(true, 2, 3)).toBe(true);
+    expect(shouldCancelOverlayOnRightClick(true, 2, 2)).toBe(false);
+    expect(shouldCancelOverlayOnRightClick(false, 0, 1)).toBe(false);
   });
 });

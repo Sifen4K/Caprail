@@ -7,6 +7,7 @@ import {
   buildPhysicalRect,
   findMonitorAtPoint,
   findSmallestWindowAtPoint,
+  shouldCancelOverlayOnRightClick,
   toPhysicalCanvasPoint,
   toSelectionRect,
   translateCanvasRectToDesktop,
@@ -201,7 +202,7 @@ function draw() {
 }
 
 canvas.addEventListener("mousedown", (e) => {
-  if (e.button === 2 && isSelecting && (e.buttons & 1) === 1) {
+  if (shouldCancelOverlayOnRightClick(isSelecting, e.button, e.buttons)) {
     e.preventDefault();
     isSelecting = false;
     hoveredWindow = null;

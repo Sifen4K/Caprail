@@ -2,6 +2,16 @@
   "appShell": {
     "title": "Caprail",
     "status": "就绪",
+    "startup": {
+      "title": "缺少可选组件",
+      "ocrInitTitle": "OCR 初始化中",
+      "ocrInitBody": "正在后台预热 OCR 引擎，首次识别前会先完成模型加载。",
+      "ocrReadyTitle": "OCR 已就绪",
+      "ocrReadyBody": "OCR 引擎已完成初始化，后续首次点击会更快。",
+      "ocrMissing": "未检测到可用 OCR 引擎。OCR 功能将不可用。请安装 PaddleOCR 或 Tesseract。",
+      "ffmpegMissing": "未检测到 FFmpeg。录屏导出功能将不可用。请安装并将与当前应用架构匹配的 %ARCH% 版本 FFmpeg 加入 PATH。",
+      "footer": "其他功能仍可正常使用。"
+    },
     "hint": {
       "tray": "右键托盘图标开始使用",
       "shortcuts": "默认快捷键：",

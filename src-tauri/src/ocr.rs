@@ -28,6 +28,14 @@ pub struct OcrRegion {
     pub confidence: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupDiagnostics {
+    pub arch: String,
+    pub ocr_available: bool,
+    pub ffmpeg_available: bool,
+}
+
 /// Performs OCR on an image.
 /// Expects RGBA pixel data. Saves to a temp PNG, runs PaddleOCR CLI, parses results.
 /// If PaddleOCR CLI is not available, falls back to Windows OCR (WinRT).
@@ -59,6 +67,24 @@ pub async fn ocr_recognize_screenshot(id: u32) -> Result<OcrResult, String> {
     tauri::async_runtime::spawn_blocking(move || ocr_recognize_rgba(rgba, width, height))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn startup_diagnostics() -> Result<StartupDiagnostics, String> {
+    tauri::async_runtime::spawn_blocking(run_startup_diagnostics)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_startup_diagnostics() -> Result<StartupDiagnostics, String> {
+    let ocr_available = ensure_ocr_worker().is_ok() || command_available("tesseract", &["--version"]);
+    let ffmpeg_available = command_available("ffmpeg", &["-version"]);
+
+    Ok(StartupDiagnostics {
+        arch: current_arch_label(),
+        ocr_available,
+        ffmpeg_available,
+    })
 }
 
 fn ocr_recognize_rgba(
@@ -115,25 +141,9 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
     let mut errors = Vec::new();
 
     for _ in 0..2 {
-        let mut worker = OCR_WORKER.lock().unwrap();
-        if worker.is_none() {
-            match PaddleOcrWorker::spawn() {
-                Ok(instance) => *worker = Some(instance),
-                Err(err) => {
-                    errors.push(err);
-                    break;
-                }
-            }
-        }
-
-        if let Some(instance) = worker.as_mut() {
-            match instance.recognize(image_path_str) {
-                Ok(result) => return Ok(result),
-                Err(err) => {
-                    errors.push(err);
-                    *worker = None;
-                }
-            }
+        match recognize_with_worker(image_path_str) {
+            Ok(result) => return Ok(result),
+            Err(err) => errors.push(err),
         }
     }
 
@@ -177,6 +187,33 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
     }
 
     Err(format!("PaddleOCR unavailable: {}", errors.join(" | ")))
+}
+
+fn recognize_with_worker(image_path: &str) -> Result<OcrResult, String> {
+    let mut worker = OCR_WORKER.lock().unwrap();
+    if worker.is_none() {
+        *worker = Some(PaddleOcrWorker::spawn()?);
+    }
+
+    if let Some(instance) = worker.as_mut() {
+        match instance.recognize(image_path) {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                *worker = None;
+                Err(err)
+            }
+        }
+    } else {
+        Err("OCR worker unavailable".to_string())
+    }
+}
+
+fn ensure_ocr_worker() -> Result<(), String> {
+    let mut worker = OCR_WORKER.lock().unwrap();
+    if worker.is_none() {
+        *worker = Some(PaddleOcrWorker::spawn()?);
+    }
+    Ok(())
 }
 
 fn parse_paddleocr_output(output: &str) -> Result<OcrResult, String> {
@@ -282,6 +319,25 @@ fn hidden_command(program: &str) -> Command {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     command
+}
+
+fn command_available(program: &str, args: &[&str]) -> bool {
+    hidden_command(program)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .args(args)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn current_arch_label() -> String {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64".to_string(),
+        "x86" => "x86".to_string(),
+        "aarch64" => "arm64".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[derive(Serialize)]

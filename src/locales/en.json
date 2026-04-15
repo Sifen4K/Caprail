@@ -2,6 +2,16 @@
   "appShell": {
     "title": "Caprail",
     "status": "Ready",
+    "startup": {
+      "title": "Optional Components Missing",
+      "ocrInitTitle": "OCR Initializing",
+      "ocrInitBody": "Caprail is warming up the OCR engine in the background so first use is faster.",
+      "ocrReadyTitle": "OCR Ready",
+      "ocrReadyBody": "The OCR engine has finished initializing and is ready to use.",
+      "ocrMissing": "No usable OCR engine was detected. OCR features will be unavailable. Install PaddleOCR or Tesseract.",
+      "ffmpegMissing": "FFmpeg was not detected. Recording export will be unavailable. Install an %ARCH% FFmpeg build and add it to PATH.",
+      "footer": "All other features remain available."
+    },
     "hint": {
       "tray": "Right-click the tray icon to start.",
       "shortcuts": "Default shortcuts:",

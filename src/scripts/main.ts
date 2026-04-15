@@ -3,15 +3,18 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { register, unregister, ShortcutEvent } from "@tauri-apps/plugin-global-shortcut";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { message } from "@tauri-apps/plugin-dialog";
 import { sendNotification, isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { resolution, type PhysicalPixel } from "./resolution-context";
 import { computeCenteredRect, computeControlWindowGeometry } from "./physical-capture.logic";
+import { t } from "./i18n";
 
 const status = document.getElementById("status")!;
 
 let isCapturing = false;
 let editorCounter = 0;
 let registeredShortcuts: string[] = []; // Track registered shortcuts for cleanup
+let startupWarningShown = false;
 
 function updateStatus(msg: string) {
   status.textContent = msg;
@@ -103,6 +106,30 @@ async function registerShortcuts() {
   }
 }
 
+async function canSendStartupToast() {
+  try {
+    return await isPermissionGranted();
+  } catch (error) {
+    console.error("Notification permission error:", error);
+    return false;
+  }
+}
+
+async function showStartupToast(titleKey: string, bodyKey: string) {
+  if (!(await canSendStartupToast())) {
+    return;
+  }
+
+  try {
+    sendNotification({
+      title: t(titleKey),
+      body: t(bodyKey),
+    });
+  } catch (error) {
+    console.error("Startup notification error:", error);
+  }
+}
+
 async function openEditorWindow(data: { id: number; width: number; height: number }) {
   // Entered editor — allow shortcuts again
   isCapturing = false;
@@ -173,6 +200,47 @@ async function showClipEditor() {
     title: "Recording Editor",
     resizable: true,
   });
+}
+
+function withArch(templateKey: string, arch: string) {
+  return t(templateKey).replace("%ARCH%", arch);
+}
+
+async function runStartupDiagnostics() {
+  await showStartupToast("appShell.startup.ocrInitTitle", "appShell.startup.ocrInitBody");
+
+  try {
+    const diagnostics = await invoke<{
+      arch: string;
+      ocrAvailable: boolean;
+      ffmpegAvailable: boolean;
+    }>("startup_diagnostics");
+
+    if (diagnostics.ocrAvailable) {
+      await showStartupToast("appShell.startup.ocrReadyTitle", "appShell.startup.ocrReadyBody");
+    }
+
+    const warnings: string[] = [];
+    if (!diagnostics.ocrAvailable) {
+      warnings.push(withArch("appShell.startup.ocrMissing", diagnostics.arch));
+    }
+    if (!diagnostics.ffmpegAvailable) {
+      warnings.push(withArch("appShell.startup.ffmpegMissing", diagnostics.arch));
+    }
+
+    if (warnings.length > 0 && !startupWarningShown) {
+      startupWarningShown = true;
+      await message(
+        `${warnings.join("\n\n")}\n\n${t("appShell.startup.footer")}`,
+        {
+          title: t("appShell.startup.title"),
+          kind: "warning",
+        }
+      );
+    }
+  } catch (error) {
+    console.error("Startup diagnostics failed:", error);
+  }
 }
 
 async function setup() {
@@ -405,6 +473,7 @@ async function setup() {
 
   await registerShortcuts();
   updateStatus("Ready");
+  void runStartupDiagnostics();
 }
 
 // Cleanup on page unload (backup cleanup - use synchronous unregister via plugin API)

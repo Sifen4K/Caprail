@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { loadLocale } from "./i18n.ts";
 import {
   prepareSettingsSave,
@@ -10,6 +11,8 @@ loadLocale("en");
 
 const screenshotInput = document.getElementById("screenshot-shortcut") as HTMLInputElement;
 const recordInput = document.getElementById("record-shortcut") as HTMLInputElement;
+const saveButton = document.getElementById("save") as HTMLButtonElement;
+const settingsWindow = getCurrentWebviewWindow();
 
 // Store original shortcuts to detect changes
 let originalScreenshotShortcut = "";
@@ -63,67 +66,76 @@ setupShortcutCapture(screenshotInput);
 setupShortcutCapture(recordInput);
 
 // Save button
-document.getElementById("save")!.onclick = async () => {
-  const existingConfig = loadedConfig ?? await invoke<AppConfig>("load_config").catch(() => ({
-    screenshot_shortcut: originalScreenshotShortcut,
-    record_shortcut: originalRecordShortcut,
-    save_path: "",
-    default_image_format: "png",
-    auto_start: false,
-    language: "en",
-    tray_menu_screenshot: "Screenshot",
-    tray_menu_record: "Record",
-    tray_menu_settings: "Settings",
-    tray_menu_quit: "Quit",
-  }));
+saveButton.onclick = async () => {
+  saveButton.disabled = true;
 
-  const saveResult = prepareSettingsSave(existingConfig, {
-    screenshotShortcut: screenshotInput.value,
-    recordShortcut: recordInput.value,
-    savePath: (document.getElementById("save-path") as HTMLInputElement).value,
-    defaultImageFormat: (document.getElementById("default-format") as HTMLSelectElement).value,
-    autoStart: (document.getElementById("auto-start") as HTMLInputElement).checked,
-  });
-  const { config } = saveResult;
+  try {
+    const existingConfig = loadedConfig ?? await invoke<AppConfig>("load_config").catch(() => ({
+      screenshot_shortcut: originalScreenshotShortcut,
+      record_shortcut: originalRecordShortcut,
+      save_path: "",
+      default_image_format: "png",
+      auto_start: false,
+      language: "en",
+      tray_menu_screenshot: "Screenshot",
+      tray_menu_record: "Record",
+      tray_menu_settings: "Settings",
+      tray_menu_quit: "Quit",
+    }));
 
-  // Validate shortcuts
-  if (!config.screenshot_shortcut || !config.record_shortcut) {
-    alert("Both shortcuts must be set!");
-    return;
-  }
+    const saveResult = prepareSettingsSave(existingConfig, {
+      screenshotShortcut: screenshotInput.value,
+      recordShortcut: recordInput.value,
+      savePath: (document.getElementById("save-path") as HTMLInputElement).value,
+      defaultImageFormat: (document.getElementById("default-format") as HTMLSelectElement).value,
+      autoStart: (document.getElementById("auto-start") as HTMLInputElement).checked,
+    });
+    const { config } = saveResult;
 
-  // Check shortcut format: should have at least one modifier + one key
-  const validateShortcut = (shortcut: string, name: string): boolean => {
-    const parts = shortcut.split("+");
-    if (parts.length < 2) {
-      alert(`${name} must include at least one modifier (Ctrl/Shift/Alt) and one key`);
-      return false;
+    // Validate shortcuts
+    if (!config.screenshot_shortcut || !config.record_shortcut) {
+      alert("Both shortcuts must be set!");
+      return;
     }
-    const modifiers = ["Ctrl", "Shift", "Alt"];
-    const hasModifier = parts.some(p => modifiers.includes(p));
-    if (!hasModifier) {
-      alert(`${name} must include at least one modifier (Ctrl/Shift/Alt)`);
-      return false;
+
+    // Check shortcut format: should have at least one modifier + one key
+    const validateShortcut = (shortcut: string, name: string): boolean => {
+      const parts = shortcut.split("+");
+      if (parts.length < 2) {
+        alert(`${name} must include at least one modifier (Ctrl/Shift/Alt) and one key`);
+        return false;
+      }
+      const modifiers = ["Ctrl", "Shift", "Alt"];
+      const hasModifier = parts.some(p => modifiers.includes(p));
+      if (!hasModifier) {
+        alert(`${name} must include at least one modifier (Ctrl/Shift/Alt)`);
+        return false;
+      }
+      return true;
+    };
+
+    if (!validateShortcut(config.screenshot_shortcut, "Screenshot shortcut")) return;
+    if (!validateShortcut(config.record_shortcut, "Record shortcut")) return;
+
+    // Basic conflict detection
+    if (config.screenshot_shortcut === config.record_shortcut) {
+      alert("Screenshot and record shortcuts cannot be the same!");
+      return;
     }
-    return true;
-  };
 
-  if (!validateShortcut(config.screenshot_shortcut, "Screenshot shortcut")) return;
-  if (!validateShortcut(config.record_shortcut, "Record shortcut")) return;
+    await invoke("save_config", { config });
+    loadedConfig = config;
 
-  // Basic conflict detection
-  if (config.screenshot_shortcut === config.record_shortcut) {
-    alert("Screenshot and record shortcuts cannot be the same!");
-    return;
+    // Notify main window to re-register shortcuts if they changed
+    if (saveResult.shortcutsChanged && saveResult.shortcutChangePayload) {
+      await emit("shortcuts-changed", saveResult.shortcutChangePayload);
+    }
+
+    await settingsWindow.close();
+  } catch (error) {
+    console.error("Failed to save settings:", error);
+    alert(`Failed to save settings: ${error}`);
+  } finally {
+    saveButton.disabled = false;
   }
-
-  // Check if shortcuts changed
-  await invoke("save_config", { config });
-
-  // Notify main window to re-register shortcuts if they changed
-  if (saveResult.shortcutsChanged && saveResult.shortcutChangePayload) {
-    await emit("shortcuts-changed", saveResult.shortcutChangePayload);
-  }
-
-  window.close();
 };

@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { EditorState } from "./editor-types";
+import {
+  buildDefaultSavePath,
+  persistLastUsedSaveDirectory,
+} from "./save-dialog.logic";
 
 type OcrPanelState = {
   requestId: number;
@@ -48,7 +52,7 @@ export async function saveToFile(state: EditorState, redrawAll: () => void) {
   const ext = format === "jpg" ? "jpg" : "png";
 
   const filePath = await save({
-    defaultPath: `${config.save_path}/screenshot.${ext}`,
+    defaultPath: buildDefaultSavePath(config.save_path, `screenshot.${ext}`),
     filters: [
       { name: "Images", extensions: [ext] },
       { name: "All", extensions: ["png", "jpg"] },
@@ -64,6 +68,7 @@ export async function saveToFile(state: EditorState, redrawAll: () => void) {
         path: filePath,
         data: await blobToNumberArray(blob),
       });
+      await persistLastUsedSaveDirectory(filePath);
     }
   }
 }

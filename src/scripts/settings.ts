@@ -3,12 +3,34 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 let settingsWindow: WebviewWindow | null = null;
 
+function trackSettingsWindow(window: WebviewWindow) {
+  settingsWindow = window;
+  void window.once("tauri://destroyed", () => {
+    if (settingsWindow?.label === window.label) {
+      settingsWindow = null;
+    }
+  });
+  void window.once("tauri://error", () => {
+    if (settingsWindow?.label === window.label) {
+      settingsWindow = null;
+    }
+  });
+}
+
 export async function openSettings() {
-  if (settingsWindow) {
-    settingsWindow.close();
+  const existingWindow = settingsWindow ?? await WebviewWindow.getByLabel("settings");
+  if (existingWindow) {
+    settingsWindow = existingWindow;
+    try {
+      await existingWindow.show();
+      await existingWindow.setFocus();
+      return;
+    } catch {
+      settingsWindow = null;
+    }
   }
 
-  settingsWindow = new WebviewWindow("settings", {
+  const window = new WebviewWindow("settings", {
     url: "src/settings.html",
     width: 500,
     height: 400,
@@ -16,6 +38,8 @@ export async function openSettings() {
     resizable: false,
     title: "Settings",
   });
+
+  trackSettingsWindow(window);
 }
 
 export async function saveConfig(config: {

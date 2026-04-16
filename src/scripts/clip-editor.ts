@@ -9,6 +9,10 @@ import {
   resolveTrimLayout,
   timelineOffsetToFrame,
 } from "./clip-editor.logic";
+import {
+  buildDefaultSavePath,
+  persistLastUsedSaveDirectory,
+} from "./save-dialog.logic";
 
 const canvas = document.getElementById("player-canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -522,7 +526,11 @@ let unlistenComplete: UnlistenFn | null = null;
 
 async function doExport(format: "mp4" | "gif") {
   const ext = format;
-  const defaultName = `recording-export.${ext}`;
+  const config = await invoke<{ save_path: string }>("load_config");
+  const defaultName = buildDefaultSavePath(
+    config.save_path,
+    `recording-export.${ext}`
+  );
 
   const outputPath = await save({
     defaultPath: defaultName,
@@ -530,6 +538,7 @@ async function doExport(format: "mp4" | "gif") {
   });
 
   if (!outputPath) return;
+  await persistLastUsedSaveDirectory(outputPath);
 
   exportProgress.style.display = "block";
   exportProgressBar.style.width = "0%";

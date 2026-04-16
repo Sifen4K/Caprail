@@ -6,11 +6,14 @@ use std::{
     sync::Mutex,
 };
 
-use crate::capture::SCREENSHOT_STORE;
+use crate::{capture::SCREENSHOT_STORE, config::load_config_sync};
 
 static OCR_WORKER: Lazy<Mutex<Option<PaddleOcrWorker>>> = Lazy::new(|| Mutex::new(None));
 const OCR_READY_PREFIX: &str = "__CAPRAIL_OCR_READY__";
 const OCR_RESULT_PREFIX: &str = "__CAPRAIL_OCR_RESULT__";
+const OCR_ENGINE_WINDOWS: &str = "windows";
+const OCR_ENGINE_PADDLE: &str = "paddle";
+const OCR_ENGINE_TESSERACT: &str = "tesseract";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
@@ -32,13 +35,20 @@ pub struct OcrRegion {
 #[serde(rename_all = "camelCase")]
 pub struct StartupDiagnostics {
     pub arch: String,
+    pub selected_ocr_engine: String,
     pub ocr_available: bool,
     pub ffmpeg_available: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrEngineAvailability {
+    pub id: String,
+    pub available: bool,
+}
+
 /// Performs OCR on an image.
-/// Expects RGBA pixel data. Saves to a temp PNG, runs PaddleOCR CLI, parses results.
-/// If PaddleOCR CLI is not available, falls back to Windows OCR (WinRT).
+/// Expects RGBA pixel data. Uses the OCR engine chosen in settings.
 #[tauri::command]
 pub async fn ocr_recognize(
     image_data: Vec<u8>,
@@ -76,12 +86,22 @@ pub async fn startup_diagnostics() -> Result<StartupDiagnostics, String> {
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn list_ocr_engines() -> Result<Vec<OcrEngineAvailability>, String> {
+    tauri::async_runtime::spawn_blocking(available_ocr_engines)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 fn run_startup_diagnostics() -> Result<StartupDiagnostics, String> {
-    let ocr_available = ensure_ocr_worker().is_ok() || command_available("tesseract", &["--version"]);
+    let config = load_config_sync();
+    let selected_ocr_engine = normalize_ocr_engine(&config.ocr_engine).to_string();
+    let ocr_available = selected_ocr_engine_available(&selected_ocr_engine);
     let ffmpeg_available = command_available("ffmpeg", &["-version"]);
 
     Ok(StartupDiagnostics {
         arch: current_arch_label(),
+        selected_ocr_engine,
         ocr_available,
         ffmpeg_available,
     })
@@ -92,7 +112,23 @@ fn ocr_recognize_rgba(
     width: u32,
     height: u32,
 ) -> Result<OcrResult, String> {
-    // Save image to temp file
+    let config = load_config_sync();
+    let selected_engine = normalize_ocr_engine(&config.ocr_engine);
+
+    match selected_engine {
+        OCR_ENGINE_WINDOWS => run_windows_ocr(&image_data, width, height),
+        OCR_ENGINE_PADDLE => run_file_based_ocr(image_data, width, height, run_paddleocr),
+        OCR_ENGINE_TESSERACT => run_file_based_ocr(image_data, width, height, run_tesseract),
+        _ => run_windows_ocr(&image_data, width, height),
+    }
+}
+
+fn run_file_based_ocr(
+    image_data: Vec<u8>,
+    width: u32,
+    height: u32,
+    runner: fn(&std::path::Path) -> Result<OcrResult, String>,
+) -> Result<OcrResult, String> {
     let temp_dir = std::env::temp_dir().join("caprail-ocr");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
     let temp_path = temp_dir.join(format!(
@@ -103,33 +139,10 @@ fn ocr_recognize_rgba(
             .as_nanos()
     ));
 
-    // Convert RGBA to PNG
-    let img = image::RgbaImage::from_raw(width, height, image_data)
-        .ok_or("Invalid image data")?;
+    let img = image::RgbaImage::from_raw(width, height, image_data).ok_or("Invalid image data")?;
     img.save(&temp_path).map_err(|e| e.to_string())?;
 
-    let mut errors = Vec::new();
-
-    // Try PaddleOCR first
-    match run_paddleocr(&temp_path) {
-        Ok(result) => {
-            let _ = std::fs::remove_file(&temp_path);
-            return Ok(result);
-        }
-        Err(err) => errors.push(err),
-    }
-
-    // Fallback: try Tesseract
-    let result = match run_tesseract(&temp_path) {
-        Ok(result) => Ok(result),
-        Err(err) => {
-            errors.push(err);
-            Err(format!(
-                "OCR unavailable. {}",
-                errors.join(" | ")
-            ))
-        }
-    };
+    let result = runner(&temp_path);
     let _ = std::fs::remove_file(&temp_path);
     result
 }
@@ -206,14 +219,6 @@ fn recognize_with_worker(image_path: &str) -> Result<OcrResult, String> {
     } else {
         Err("OCR worker unavailable".to_string())
     }
-}
-
-fn ensure_ocr_worker() -> Result<(), String> {
-    let mut worker = OCR_WORKER.lock().unwrap();
-    if worker.is_none() {
-        *worker = Some(PaddleOcrWorker::spawn()?);
-    }
-    Ok(())
 }
 
 fn parse_paddleocr_output(output: &str) -> Result<OcrResult, String> {
@@ -338,6 +343,147 @@ fn current_arch_label() -> String {
         "aarch64" => "arm64".to_string(),
         other => other.to_string(),
     }
+}
+
+fn normalize_ocr_engine(engine: &str) -> &str {
+    match engine.trim().to_ascii_lowercase().as_str() {
+        OCR_ENGINE_PADDLE => OCR_ENGINE_PADDLE,
+        OCR_ENGINE_TESSERACT => OCR_ENGINE_TESSERACT,
+        _ => OCR_ENGINE_WINDOWS,
+    }
+}
+
+fn available_ocr_engines() -> Vec<OcrEngineAvailability> {
+    vec![
+        OcrEngineAvailability {
+            id: OCR_ENGINE_WINDOWS.to_string(),
+            available: windows_ocr_available(),
+        },
+        OcrEngineAvailability {
+            id: OCR_ENGINE_PADDLE.to_string(),
+            available: paddle_ocr_available(),
+        },
+        OcrEngineAvailability {
+            id: OCR_ENGINE_TESSERACT.to_string(),
+            available: tesseract_available(),
+        },
+    ]
+}
+
+fn selected_ocr_engine_available(engine: &str) -> bool {
+    match normalize_ocr_engine(engine) {
+        OCR_ENGINE_PADDLE => ensure_ocr_worker().is_ok(),
+        OCR_ENGINE_TESSERACT => tesseract_available(),
+        _ => windows_ocr_available(),
+    }
+}
+
+fn windows_ocr_available() -> bool {
+    #[cfg(windows)]
+    {
+        return create_windows_ocr_engine().is_ok();
+    }
+
+    #[allow(unreachable_code)]
+    false
+}
+
+fn paddle_ocr_available() -> bool {
+    command_available("paddleocr", &["--help"])
+        || python_module_available("python", &["-c", PADDLEOCR_MODULE_CHECK_SCRIPT])
+        || python_module_available("py", &["-3", "-c", PADDLEOCR_MODULE_CHECK_SCRIPT])
+        || python_module_available("py", &["-c", PADDLEOCR_MODULE_CHECK_SCRIPT])
+}
+
+fn ensure_ocr_worker() -> Result<(), String> {
+    let mut worker = OCR_WORKER.lock().unwrap();
+    if worker.is_none() {
+        *worker = Some(PaddleOcrWorker::spawn()?);
+    }
+    Ok(())
+}
+
+fn tesseract_available() -> bool {
+    command_available("tesseract", &["--version"])
+}
+
+fn run_windows_ocr(image_data: &[u8], width: u32, height: u32) -> Result<OcrResult, String> {
+    #[cfg(windows)]
+    {
+        use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
+        use windows::Storage::Streams::DataWriter;
+
+        let engine = create_windows_ocr_engine()?;
+
+        let writer = DataWriter::new().map_err(|e| format!("Windows OCR writer failed: {e}"))?;
+        writer
+            .WriteBytes(image_data)
+            .map_err(|e| format!("Windows OCR buffer write failed: {e}"))?;
+        let buffer = writer
+            .DetachBuffer()
+            .map_err(|e| format!("Windows OCR buffer detach failed: {e}"))?;
+
+        let bitmap = SoftwareBitmap::CreateCopyFromBuffer(
+            &buffer,
+            BitmapPixelFormat::Rgba8,
+            width as i32,
+            height as i32,
+        )
+        .map_err(|e| format!("Windows OCR bitmap conversion failed: {e}"))?;
+
+        let result = engine
+            .RecognizeAsync(&bitmap)
+            .map_err(|e| format!("Windows OCR recognize failed: {e}"))?
+            .get()
+            .map_err(|e| format!("Windows OCR await failed: {e}"))?;
+
+        return Ok(OcrResult {
+            text: result
+                .Text()
+                .map_err(|e| format!("Windows OCR text extraction failed: {e}"))?
+                .to_string(),
+            regions: vec![],
+        });
+    }
+
+    #[allow(unreachable_code)]
+    Err("Windows OCR is only available on Windows".to_string())
+}
+
+#[cfg(windows)]
+fn create_windows_ocr_engine() -> Result<windows::Media::Ocr::OcrEngine, String> {
+    use windows::Globalization::Language;
+    use windows::Media::Ocr::OcrEngine;
+
+    for tag in [
+        "zh-Hans",
+        "zh-CN",
+        "zh-SG",
+        "zh-Hant",
+        "zh-TW",
+        "zh-HK",
+    ] {
+        let language = Language::CreateLanguage(&tag.into())
+            .map_err(|e| format!("Windows OCR language creation failed for {tag}: {e}"))?;
+
+        if OcrEngine::IsLanguageSupported(&language).unwrap_or(false) {
+            return OcrEngine::TryCreateFromLanguage(&language)
+                .map_err(|e| format!("Windows OCR failed to create {tag} engine: {e}"));
+        }
+    }
+
+    OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| format!("Windows OCR unavailable: {e}"))
+}
+
+fn python_module_available(program: &str, args: &[&str]) -> bool {
+    hidden_command(program)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .args(args)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[derive(Serialize)]
@@ -555,3 +701,6 @@ for raw_line in sys.stdin:
 
     print(RESULT_PREFIX + json.dumps(payload, ensure_ascii=False), flush=True)
 "#;
+
+const PADDLEOCR_MODULE_CHECK_SCRIPT: &str =
+    "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('paddleocr') else 1)";

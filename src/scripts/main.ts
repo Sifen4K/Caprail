@@ -206,23 +206,47 @@ function withArch(templateKey: string, arch: string) {
   return t(templateKey).replace("%ARCH%", arch);
 }
 
-async function runStartupDiagnostics() {
-  await showStartupToast("appShell.startup.ocrInitTitle", "appShell.startup.ocrInitBody");
+function getOcrEngineLabel(engine: string) {
+  switch (engine) {
+    case "paddle":
+      return t("settings.ocrEngineOptions.paddle");
+    case "tesseract":
+      return t("settings.ocrEngineOptions.tesseract");
+    case "windows":
+    default:
+      return t("settings.ocrEngineOptions.windows");
+  }
+}
 
+function withEngine(templateKey: string, engine: string) {
+  return t(templateKey).replace("%ENGINE%", getOcrEngineLabel(engine));
+}
+
+async function runStartupDiagnostics() {
   try {
+    const config = await invoke<{
+      ocr_engine?: string;
+    }>("load_config");
+    const selectedEngine = (config.ocr_engine ?? "windows").toLowerCase();
+
+    if (selectedEngine === "paddle") {
+      await showStartupToast("appShell.startup.ocrInitTitle", "appShell.startup.ocrInitBody");
+    }
+
     const diagnostics = await invoke<{
       arch: string;
+      selectedOcrEngine: string;
       ocrAvailable: boolean;
       ffmpegAvailable: boolean;
     }>("startup_diagnostics");
 
-    if (diagnostics.ocrAvailable) {
+    if (diagnostics.ocrAvailable && diagnostics.selectedOcrEngine === "paddle") {
       await showStartupToast("appShell.startup.ocrReadyTitle", "appShell.startup.ocrReadyBody");
     }
 
     const warnings: string[] = [];
     if (!diagnostics.ocrAvailable) {
-      warnings.push(withArch("appShell.startup.ocrMissing", diagnostics.arch));
+      warnings.push(withEngine("appShell.startup.ocrMissing", diagnostics.selectedOcrEngine));
     }
     if (!diagnostics.ffmpegAvailable) {
       warnings.push(withArch("appShell.startup.ffmpegMissing", diagnostics.arch));

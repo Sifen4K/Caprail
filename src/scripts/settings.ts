@@ -33,7 +33,7 @@ export async function openSettings() {
   const window = new WebviewWindow("settings", {
     url: "src/settings.html",
     width: 500,
-    height: 400,
+    height: 450,
     center: true,
     resizable: false,
     title: "Settings",
@@ -48,6 +48,7 @@ export async function saveConfig(config: {
   save_path: string;
   default_image_format: string;
   auto_start: boolean;
+  ocr_engine: string;
 }) {
   await invoke("save_config", { config });
 }

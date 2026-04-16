@@ -4,6 +4,7 @@ export interface AppConfig {
   save_path: string;
   default_image_format: string;
   auto_start: boolean;
+  ocr_engine: string;
   language: string;
   tray_menu_screenshot: string;
   tray_menu_record: string;
@@ -17,6 +18,7 @@ export interface SettingsFormValues {
   savePath: string;
   defaultImageFormat: string;
   autoStart: boolean;
+  ocrEngine: string;
 }
 
 export interface ShortcutChangePayload {
@@ -32,6 +34,11 @@ export interface SettingsSaveResult {
   shortcutChangePayload: ShortcutChangePayload | null;
 }
 
+export interface OcrEngineOption {
+  id: string;
+  available: boolean;
+}
+
 export function buildConfigFromSettingsForm(
   existingConfig: AppConfig,
   formValues: SettingsFormValues
@@ -42,6 +49,7 @@ export function buildConfigFromSettingsForm(
     save_path: formValues.savePath,
     default_image_format: formValues.defaultImageFormat,
     auto_start: formValues.autoStart,
+    ocr_engine: formValues.ocrEngine,
     tray_menu_screenshot: existingConfig.tray_menu_screenshot,
     tray_menu_record: existingConfig.tray_menu_record,
     tray_menu_settings: existingConfig.tray_menu_settings,
@@ -79,4 +87,16 @@ export function prepareSettingsSave(
         }
       : null,
   };
+}
+
+export function choosePreferredOcrEngine(
+  selectedEngine: string,
+  options: OcrEngineOption[]
+): string {
+  return (
+    options.find((option) => option.id === selectedEngine)?.id ??
+    options.find((option) => option.id === "windows" && option.available)?.id ??
+    options.find((option) => option.available)?.id ??
+    "windows"
+  );
 }

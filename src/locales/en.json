@@ -5,10 +5,10 @@
     "startup": {
       "title": "Optional Components Missing",
       "ocrInitTitle": "OCR Initializing",
-      "ocrInitBody": "Caprail is warming up the OCR engine in the background so first use is faster.",
+      "ocrInitBody": "Caprail is warming up the currently selected OCR engine in the background.",
       "ocrReadyTitle": "OCR Ready",
-      "ocrReadyBody": "The OCR engine has finished initializing and is ready to use.",
-      "ocrMissing": "No usable OCR engine was detected. OCR features will be unavailable. Install PaddleOCR or Tesseract.",
+      "ocrReadyBody": "The currently selected OCR engine has finished initializing and is ready to use.",
+      "ocrMissing": "The currently selected OCR engine, %ENGINE%, is unavailable. Install it or switch to another available engine.",
       "ffmpegMissing": "FFmpeg was not detected. Recording export will be unavailable. Install an %ARCH% FFmpeg build and add it to PATH.",
       "footer": "All other features remain available."
     },
@@ -25,9 +25,16 @@
     "recordShortcut": "Record shortcut:",
     "savePath": "Save path:",
     "defaultFormat": "Default format:",
+    "ocrEngine": "OCR engine:",
     "autoStart": "Auto-start on login:",
     "save": "Save",
+    "unavailable": "Unavailable",
     "shortcutPlaceholder": "Press shortcut...",
+    "ocrEngineOptions": {
+      "windows": "Windows OCR",
+      "paddle": "PaddleOCR",
+      "tesseract": "Tesseract"
+    },
     "validation": {
       "bothRequired": "Both shortcuts must be set!",
       "needsModifier": "%NAME% must include at least one modifier (Ctrl/Shift/Alt) and one key",

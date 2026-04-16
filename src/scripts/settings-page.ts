@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { loadLocale } from "./i18n.ts";
+import { loadLocale, t } from "./i18n.ts";
 import {
+  choosePreferredOcrEngine,
   prepareSettingsSave,
   type AppConfig,
 } from "./settings-page.logic.ts";
@@ -11,15 +12,63 @@ loadLocale("en");
 
 const screenshotInput = document.getElementById("screenshot-shortcut") as HTMLInputElement;
 const recordInput = document.getElementById("record-shortcut") as HTMLInputElement;
+const ocrEngineSelect = document.getElementById("ocr-engine") as HTMLSelectElement;
 const saveButton = document.getElementById("save") as HTMLButtonElement;
 const settingsWindow = getCurrentWebviewWindow();
+
+type OcrEngineAvailability = {
+  id: string;
+  available: boolean;
+};
 
 // Store original shortcuts to detect changes
 let originalScreenshotShortcut = "";
 let originalRecordShortcut = "";
 let loadedConfig: AppConfig | null = null;
+let availableOcrEngines: OcrEngineAvailability[] = [];
+let ocrEngineAvailabilityLoaded = false;
 
-// Load config
+function getOcrEngineLabel(id: string): string {
+  switch (id) {
+    case "paddle":
+      return t("settings.ocrEngineOptions.paddle");
+    case "tesseract":
+      return t("settings.ocrEngineOptions.tesseract");
+    case "windows":
+    default:
+      return t("settings.ocrEngineOptions.windows");
+  }
+}
+
+function populateOcrEngineOptions(selectedEngine: string) {
+  const options = ocrEngineAvailabilityLoaded && availableOcrEngines.length > 0
+    ? availableOcrEngines
+    : [
+        { id: "windows", available: true },
+        { id: "paddle", available: true },
+        { id: "tesseract", available: true },
+      ];
+
+  const preferredEngine = choosePreferredOcrEngine(selectedEngine, options);
+
+  ocrEngineSelect.innerHTML = "";
+  for (const option of options) {
+    const element = document.createElement("option");
+    element.value = option.id;
+    element.textContent = !ocrEngineAvailabilityLoaded
+      ? getOcrEngineLabel(option.id)
+      : option.available
+      ? getOcrEngineLabel(option.id)
+      : `${getOcrEngineLabel(option.id)} (${t("settings.unavailable")})`;
+    element.disabled = ocrEngineAvailabilityLoaded && !option.available;
+    element.selected = option.id === preferredEngine;
+    ocrEngineSelect.appendChild(element);
+  }
+
+  ocrEngineSelect.value = preferredEngine;
+  ocrEngineSelect.disabled = !ocrEngineAvailabilityLoaded;
+}
+
 invoke<AppConfig>("load_config").then((config) => {
   loadedConfig = config;
   originalScreenshotShortcut = config.screenshot_shortcut;
@@ -29,6 +78,20 @@ invoke<AppConfig>("load_config").then((config) => {
   (document.getElementById("save-path") as HTMLInputElement).value = config.save_path;
   (document.getElementById("default-format") as HTMLSelectElement).value = config.default_image_format;
   (document.getElementById("auto-start") as HTMLInputElement).checked = config.auto_start;
+  populateOcrEngineOptions(config.ocr_engine);
+
+  requestAnimationFrame(() => {
+    void invoke<OcrEngineAvailability[]>("list_ocr_engines").then((engines) => {
+      availableOcrEngines = engines;
+      ocrEngineAvailabilityLoaded = true;
+      populateOcrEngineOptions(config.ocr_engine);
+    }).catch((error) => {
+      console.error("Failed to load OCR engine availability:", error);
+    });
+  });
+}).catch((error) => {
+  console.error("Failed to load settings data:", error);
+  populateOcrEngineOptions("windows");
 });
 
 // Shortcut key capture
@@ -76,6 +139,7 @@ saveButton.onclick = async () => {
       save_path: "",
       default_image_format: "png",
       auto_start: false,
+      ocr_engine: "windows",
       language: "en",
       tray_menu_screenshot: "Screenshot",
       tray_menu_record: "Record",
@@ -89,6 +153,7 @@ saveButton.onclick = async () => {
       savePath: (document.getElementById("save-path") as HTMLInputElement).value,
       defaultImageFormat: (document.getElementById("default-format") as HTMLSelectElement).value,
       autoStart: (document.getElementById("auto-start") as HTMLInputElement).checked,
+      ocrEngine: ocrEngineSelect.value,
     });
     const { config } = saveResult;
 

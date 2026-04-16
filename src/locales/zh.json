@@ -5,10 +5,10 @@
     "startup": {
       "title": "缺少可选组件",
       "ocrInitTitle": "OCR 初始化中",
-      "ocrInitBody": "正在后台预热 OCR 引擎，首次识别前会先完成模型加载。",
+      "ocrInitBody": "正在后台预热当前选择的 OCR 引擎。",
       "ocrReadyTitle": "OCR 已就绪",
-      "ocrReadyBody": "OCR 引擎已完成初始化，后续首次点击会更快。",
-      "ocrMissing": "未检测到可用 OCR 引擎。OCR 功能将不可用。请安装 PaddleOCR 或 Tesseract。",
+      "ocrReadyBody": "当前选择的 OCR 引擎已完成初始化，可以直接使用。",
+      "ocrMissing": "当前选择的 OCR 引擎 %ENGINE% 不可用。请安装或切换到其他可用引擎。",
       "ffmpegMissing": "未检测到 FFmpeg。录屏导出功能将不可用。请安装并将与当前应用架构匹配的 %ARCH% 版本 FFmpeg 加入 PATH。",
       "footer": "其他功能仍可正常使用。"
     },
@@ -25,9 +25,16 @@
     "recordShortcut": "录屏快捷键：",
     "savePath": "保存路径：",
     "defaultFormat": "默认格式：",
+    "ocrEngine": "OCR 引擎：",
     "autoStart": "开机自启：",
     "save": "保存",
+    "unavailable": "不可用",
     "shortcutPlaceholder": "按下快捷键...",
+    "ocrEngineOptions": {
+      "windows": "Windows OCR",
+      "paddle": "PaddleOCR",
+      "tesseract": "Tesseract"
+    },
     "validation": {
       "bothRequired": "快捷键不能为空！",
       "needsModifier": "%NAME% 必须包含一个修饰键（Ctrl/Shift/Alt）和一个按键",

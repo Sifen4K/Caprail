@@ -7,6 +7,8 @@ pub struct AppConfig {
     pub save_path: String,
     pub default_image_format: String,
     pub auto_start: bool,
+    #[serde(default = "default_ocr_engine")]
+    pub ocr_engine: String,
     #[serde(default)]
     pub language: String,
     #[serde(default)]
@@ -31,6 +33,7 @@ impl Default for AppConfig {
                 .to_string(),
             default_image_format: "png".to_string(),
             auto_start: false,
+            ocr_engine: default_ocr_engine(),
             language: "en".to_string(),
             tray_menu_screenshot: "Screenshot".to_string(),
             tray_menu_record: "Record".to_string(),
@@ -38,6 +41,10 @@ impl Default for AppConfig {
             tray_menu_quit: "Quit".to_string(),
         }
     }
+}
+
+fn default_ocr_engine() -> String {
+    "windows".to_string()
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -69,6 +76,10 @@ fn apply_defaults(cfg: &mut AppConfig) -> bool {
             .join("Caprail")
             .to_string_lossy()
             .to_string();
+        changed = true;
+    }
+    if cfg.ocr_engine.trim().is_empty() {
+        cfg.ocr_engine = default_ocr_engine();
         changed = true;
     }
     changed
@@ -174,6 +185,7 @@ mod tests {
             save_path: String::new(),
             default_image_format: "png".to_string(),
             auto_start: false,
+            ocr_engine: String::new(),
             language: "zh".to_string(),
             tray_menu_screenshot: "截图".to_string(),
             tray_menu_record: "录屏".to_string(),
@@ -185,6 +197,7 @@ mod tests {
 
         assert!(changed);
         assert!(!config.save_path.is_empty());
+        assert_eq!(config.ocr_engine, "windows");
         assert_eq!(config.language, "zh");
         assert_eq!(config.tray_menu_screenshot, "截图");
         assert_eq!(config.tray_menu_record, "录屏");
@@ -200,6 +213,7 @@ mod tests {
             "save_path": "D:/Captures",
             "default_image_format": "png",
             "auto_start": false,
+            "ocr_engine": "paddle",
             "language": "zh",
             "tray_menu_screenshot": "截图",
             "tray_menu_record": "录屏",
@@ -209,6 +223,7 @@ mod tests {
 
         let config: AppConfig = serde_json::from_str(json).expect("config should deserialize");
 
+        assert_eq!(config.ocr_engine, "paddle");
         assert_eq!(config.language, "zh");
         assert_eq!(config.tray_menu_screenshot, "截图");
         assert_eq!(config.tray_menu_record, "录屏");

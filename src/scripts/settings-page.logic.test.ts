@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildConfigFromSettingsForm,
+  choosePreferredOcrEngine,
   haveShortcutsChanged,
   prepareSettingsSave,
   type AppConfig,
@@ -13,6 +14,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     save_path: "C:/Users/test/Pictures/Caprail",
     default_image_format: "png",
     auto_start: false,
+    ocr_engine: "windows",
     language: "zh",
     tray_menu_screenshot: "截图",
     tray_menu_record: "录屏",
@@ -30,6 +32,7 @@ describe("settings-page save payload", () => {
       savePath: "D:/Captures",
       defaultImageFormat: "jpg",
       autoStart: true,
+      ocrEngine: "paddle",
     });
 
     expect(config.screenshot_shortcut).toBe("Ctrl+Alt+A");
@@ -37,6 +40,7 @@ describe("settings-page save payload", () => {
     expect(config.save_path).toBe("D:/Captures");
     expect(config.default_image_format).toBe("jpg");
     expect(config.auto_start).toBe(true);
+    expect(config.ocr_engine).toBe("paddle");
   });
 
   it("preserves existing locale and tray labels when saving unrelated settings", () => {
@@ -48,6 +52,7 @@ describe("settings-page save payload", () => {
       savePath: "D:/Captures",
       defaultImageFormat: existingConfig.default_image_format,
       autoStart: existingConfig.auto_start,
+      ocrEngine: existingConfig.ocr_engine,
     });
 
     expect(config.language).toBe(existingConfig.language);
@@ -79,6 +84,7 @@ describe("settings save workflow", () => {
       savePath: "D:/Captures",
       defaultImageFormat: "jpg",
       autoStart: true,
+      ocrEngine: existingConfig.ocr_engine,
     });
 
     expect(result.config.language).toBe("zh");
@@ -99,6 +105,7 @@ describe("settings save workflow", () => {
       savePath: existingConfig.save_path,
       defaultImageFormat: existingConfig.default_image_format,
       autoStart: existingConfig.auto_start,
+      ocrEngine: "tesseract",
     });
 
     expect(result.shortcutsChanged).toBe(true);
@@ -110,5 +117,28 @@ describe("settings save workflow", () => {
     });
     expect(result.config.language).toBe("zh");
     expect(result.config.tray_menu_screenshot).toBe("截图");
+    expect(result.config.ocr_engine).toBe("tesseract");
+  });
+});
+
+describe("ocr engine selection", () => {
+  it("preserves the saved engine even when it is unavailable", () => {
+    const selected = choosePreferredOcrEngine("tesseract", [
+      { id: "windows", available: true },
+      { id: "paddle", available: true },
+      { id: "tesseract", available: false },
+    ]);
+
+    expect(selected).toBe("tesseract");
+  });
+
+  it("falls back to windows when the saved engine no longer exists", () => {
+    const selected = choosePreferredOcrEngine("missing", [
+      { id: "windows", available: true },
+      { id: "paddle", available: true },
+      { id: "tesseract", available: false },
+    ]);
+
+    expect(selected).toBe("windows");
   });
 });

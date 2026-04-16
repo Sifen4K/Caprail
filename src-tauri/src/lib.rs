@@ -177,6 +177,7 @@ pub fn run() {
             export::export_video,
             ocr::ocr_recognize,
             ocr::ocr_recognize_screenshot,
+            ocr::list_ocr_engines,
             ocr::startup_diagnostics,
         ])
         .on_window_event(|window, event| {

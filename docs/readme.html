@@ -59,6 +59,15 @@ A screenshot and screen recording tool for Windows.
 | Export | MP4 / GIF |
 | OCR | Extract text from screenshot (requires OCR engine) |
 
+### Annotation Editor
+
+- The editor opens immediately after taking a screenshot.
+- Small images are displayed with a visible border around the canvas area.
+- The top toolbar supports wrapping on narrow windows, and the window size adapts to the wrapped toolbar height.
+- Use the mouse wheel to zoom the screenshot and middle/right mouse drag to pan.
+- The OCR result panel is a floating panel in the top-right corner and can stay open while you continue inspecting the image.
+- OCR results can be copied as plain text from the panel.
+
 ### Shortcuts
 
 | Action | Default |
@@ -94,7 +103,13 @@ ffmpeg -version
 
 #### Optional
 
-**OCR Engine** — required for text extraction, choose one:
+**OCR Engine** — required for text extraction, choose one in Settings:
+
+**Option 0: Windows OCR**
+
+- Fastest setup on Windows
+- Good default for Latin text and light OCR use
+- Available directly from the app when the system OCR components are present
 
 **Option 1: PaddleOCR (recommended, better Chinese OCR)**
 
@@ -140,15 +155,29 @@ Check if another app is using the same shortcut. You can rebind shortcuts in Set
 | Rust | >= 1.75 | Backend compilation |
 | Visual Studio Build Tools | 2022 | Select "Desktop development with C++" |
 
+### Common Commands
+
+```bash
+npm install
+npm test
+npm run build
+npm run tauri dev
+npm run tauri build
+```
+
 ### Quick Start
 
 ```bash
 npm install
+npm test
 npm run tauri dev   # Development mode
 npm run tauri build  # Build installer
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/`
+Build output:
+
+- App executable: `src-tauri/target/release/caprail.exe`
+- NSIS installer: `src-tauri/target/release/bundle/nsis/Caprail_0.1.0_x64-setup.exe`
 
 ### Project Structure
 
@@ -185,6 +214,8 @@ Caprail/
 **Video Export**: Streams raw frames from memory to FFmpeg via pipe, with real-time progress callbacks.
 
 **Annotation Rendering**: Multi-layer Canvas strategy — background (screenshot) + annotation layer (confirmed) + interaction layer (in-progress drawing).
+
+**Editor Layout**: The annotation editor sizes the window according to the wrapped toolbar height, and the OCR panel is displayed as an independent floating overlay.
 
 **DPI Awareness**: Per-Monitor DPI Awareness enabled for correct multi-monitor handling with different scaling.
 
@@ -225,6 +256,15 @@ Windows 平台的截图与录屏工具。
 | 导出 | MP4 / GIF 格式导出 |
 | OCR 文字识别 | 提取截图中的文字（需安装 OCR 引擎） |
 
+### 截图编辑器
+
+- 截图后会立即打开标注编辑器。
+- 小图会在画布周围保留一圈可见边距。
+- 顶部工具栏在窄窗口下允许自动换行，窗口尺寸会适配换行后的工具栏高度。
+- 鼠标滚轮可缩放截图，中键或右键拖动可平移画布。
+- OCR 结果面板固定悬浮在右上角，打开后仍可继续查看图片。
+- OCR 结果可直接在面板内复制为纯文本。
+
 ### 快捷键
 
 | 操作 | 默认快捷键 |
@@ -260,7 +300,13 @@ ffmpeg -version
 
 #### 可选依赖
 
-**OCR 引擎** — 文字识别功能必需，二选一：
+**OCR 引擎** — 文字识别功能必需，可在设置中切换：
+
+**方案零：Windows OCR**
+
+- Windows 下安装成本最低
+- 适合英文和轻量 OCR 场景
+- 系统组件可用时可直接在应用内选择
 
 **方案一：PaddleOCR（推荐，中文识别效果好）**
 
@@ -306,15 +352,29 @@ winget install UB-Mannheim.TesseractOCR
 | Rust | >= 1.75 | 后端编译 |
 | Visual Studio Build Tools | 2022 | 勾选「使用 C++ 的桌面开发」 |
 
+### 常用命令
+
+```bash
+npm install
+npm test
+npm run build
+npm run tauri dev
+npm run tauri build
+```
+
 ### 快速开始
 
 ```bash
 npm install
+npm test
 npm run tauri dev   # 开发模式
 npm run tauri build  # 构建安装包
 ```
 
-构建产物位于 `src-tauri/target/release/bundle/nsis/`。
+构建产物：
+
+- 可执行文件：`src-tauri/target/release/caprail.exe`
+- NSIS 安装包：`src-tauri/target/release/bundle/nsis/Caprail_0.1.0_x64-setup.exe`
 
 ### 项目结构
 
@@ -351,6 +411,8 @@ Caprail/
 **视频导出**: 通过管道将内存中的原始帧流式传输给 FFmpeg 进程，支持实时进度回调。
 
 **标注渲染**: 多层 Canvas 分离策略——背景层（截图）+ 标注层（已确认）+ 交互层（正在绘制）。
+
+**编辑器布局**: 标注编辑器会根据工具栏换行后的高度确定窗口尺寸，OCR 面板作为独立悬浮层显示。
 
 **DPI 感知**: 启用 Per-Monitor DPI Awareness，正确处理多显示器不同缩放的场景。
 

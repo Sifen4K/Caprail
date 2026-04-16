@@ -97,12 +97,6 @@ export async function performOcr(screenshotId: number | null) {
   const ocrPanel = document.getElementById("ocr-panel")!;
   const ocrText = document.getElementById("ocr-text") as HTMLTextAreaElement;
 
-  // Dynamically set top position based on actual toolbar height
-  const toolbar = document.getElementById("toolbar");
-  if (toolbar) {
-    ocrPanel.style.top = `${toolbar.offsetHeight}px`;
-  }
-
   ocrPanel.style.display = "flex";
 
   if (

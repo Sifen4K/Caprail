@@ -9,8 +9,15 @@ import { handleWheel, startPan, endPan, applyZoomTransform } from "./editor-zoom
 
 // --- State ---
 
+const INITIAL_CANVAS_MARGIN = 16;
+const MIN_TOOLBAR_HEIGHT = 44;
+const MAX_WINDOW_WIDTH = 1600;
+const MAX_WINDOW_HEIGHT = 1000;
+
 const canvas = document.getElementById("editor-canvas") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
+const toolbar = document.getElementById("toolbar") as HTMLDivElement;
+const canvasWrapper = document.getElementById("canvas-wrapper") as HTMLDivElement;
 
 const state: EditorState = {
   currentTool: "rect",
@@ -42,6 +49,62 @@ const bakeAndRedraw = () => {
   bakeBuffer(state);
   redrawAll(state);
 };
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function positionCanvasForInitialView(logicalWidth: number, logicalHeight: number) {
+  const availableWidth = canvasWrapper.clientWidth;
+  const availableHeight = canvasWrapper.clientHeight;
+  const canLeaveHorizontalBorder = logicalWidth + INITIAL_CANVAS_MARGIN * 2 <= availableWidth;
+  const canLeaveVerticalBorder = logicalHeight + INITIAL_CANVAS_MARGIN * 2 <= availableHeight;
+
+  state.zoom = 1;
+  state.panX = Math.round(
+    canLeaveHorizontalBorder
+      ? Math.max(INITIAL_CANVAS_MARGIN, (availableWidth - logicalWidth) / 2)
+      : Math.max(0, (availableWidth - logicalWidth) / 2)
+  );
+  state.panY = Math.round(
+    canLeaveVerticalBorder
+      ? Math.max(INITIAL_CANVAS_MARGIN, (availableHeight - logicalHeight) / 2)
+      : Math.max(0, (availableHeight - logicalHeight) / 2)
+  );
+
+  applyZoomTransform(state);
+}
+
+async function resizeWindowToFitContent(logicalWidth: number, logicalHeight: number) {
+  const win = getCurrentWindow();
+  const windowWidth = Math.min(logicalWidth + INITIAL_CANVAS_MARGIN * 2, MAX_WINDOW_WIDTH);
+  const initialToolbarHeight = Math.max(toolbar.getBoundingClientRect().height, MIN_TOOLBAR_HEIGHT);
+  const provisionalHeight = Math.min(
+    logicalHeight + initialToolbarHeight + INITIAL_CANVAS_MARGIN * 2,
+    MAX_WINDOW_HEIGHT
+  );
+
+  await win.setSize(new LogicalSize(windowWidth, provisionalHeight));
+  await nextFrame();
+
+  const actualToolbarHeight = Math.max(toolbar.getBoundingClientRect().height, MIN_TOOLBAR_HEIGHT);
+  const windowHeight = Math.min(
+    logicalHeight + actualToolbarHeight + INITIAL_CANVAS_MARGIN * 2,
+    MAX_WINDOW_HEIGHT
+  );
+
+  if (windowHeight !== provisionalHeight) {
+    await win.setSize(new LogicalSize(windowWidth, windowHeight));
+    await nextFrame();
+  }
+
+  positionCanvasForInitialView(logicalWidth, logicalHeight);
+  await win.center();
+
+  console.log("Window resized to:", windowWidth, "x", windowHeight, "toolbar:", actualToolbarHeight);
+}
 
 // --- Image Loading ---
 
@@ -97,16 +160,7 @@ async function loadScreenshot() {
 
     bakeBuffer(state);
 
-    // Resize window to fit the screenshot (logical size + padding)
-    const win = getCurrentWindow();
-    const toolbarHeight = 44; // toolbar + border
-    const padding = 20;
-    const windowWidth = Math.min(logicalWidth + padding, 1600);
-    const windowHeight = Math.min(logicalHeight + toolbarHeight + padding, 1000);
-    await win.setSize(new LogicalSize(windowWidth, windowHeight));
-    await win.center();
-
-    console.log("Window resized to:", windowWidth, "x", windowHeight);
+    await resizeWindowToFitContent(logicalWidth, logicalHeight);
   } catch (err) {
     console.error("Failed to load screenshot:", err);
   }
@@ -199,8 +253,6 @@ window.addEventListener("keydown", (e) => {
 });
 
 // --- Zoom and Pan handlers ---
-
-const canvasWrapper = document.getElementById("canvas-wrapper")!;
 
 // Wheel zoom
 canvasWrapper.addEventListener("wheel", (e) => {

@@ -189,11 +189,15 @@ saveButton.onclick = async () => {
     }
 
     await invoke("save_config", { config });
+    const ocrEngineChanged = existingConfig.ocr_engine !== config.ocr_engine;
     loadedConfig = config;
 
     // Notify main window to re-register shortcuts if they changed
     if (saveResult.shortcutsChanged && saveResult.shortcutChangePayload) {
       await emit("shortcuts-changed", saveResult.shortcutChangePayload);
+    }
+    if (ocrEngineChanged) {
+      await emit("ocr-engine-changed", { engine: config.ocr_engine });
     }
 
     await settingsWindow.close();

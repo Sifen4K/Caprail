@@ -108,7 +108,12 @@ async function registerShortcuts() {
 
 async function canSendStartupToast() {
   try {
-    return await isPermissionGranted();
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      const permission = await requestPermission();
+      granted = permission === "granted";
+    }
+    return granted;
   } catch (error) {
     console.error("Notification permission error:", error);
     return false;
@@ -493,6 +498,11 @@ async function setup() {
         console.error("Notification error:", notifError);
       }
     }
+  });
+
+  await listen<{ engine: string }>("ocr-engine-changed", async (event) => {
+    updateStatus(`OCR engine changed: ${event.payload.engine}`);
+    void runStartupDiagnostics();
   });
 
   await registerShortcuts();

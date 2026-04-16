@@ -2,6 +2,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader, Write},
+    path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::Mutex,
 };
@@ -154,10 +155,13 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
         .ok_or_else(|| "Invalid OCR image path".to_string())?;
     let mut errors = Vec::new();
 
-    for _ in 0..2 {
-        match recognize_with_worker(image_path_str) {
-            Ok(result) => return Ok(result),
-            Err(err) => errors.push(err),
+    match recognize_with_worker(image_path_str) {
+        Ok(result) => return Ok(result),
+        Err(err) => {
+            if !should_fallback_to_paddle_cli(&err) {
+                return Err(err);
+            }
+            errors.push(err);
         }
     }
 
@@ -180,7 +184,8 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
     ];
 
     if let Some(output) = try_command("paddleocr", &cli_args_v3, &mut errors) {
-        return parse_paddleocr_output(&String::from_utf8_lossy(&output.stdout));
+        return parse_paddleocr_output(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|err| format!("{err}. Raw output: {}", String::from_utf8_lossy(&output.stdout).trim()));
     }
 
     let cli_args_legacy = [
@@ -197,10 +202,21 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
     ];
 
     if let Some(output) = try_command("paddleocr", &cli_args_legacy, &mut errors) {
-        return parse_paddleocr_output(&String::from_utf8_lossy(&output.stdout));
+        return parse_paddleocr_output(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|err| format!("{err}. Raw output: {}", String::from_utf8_lossy(&output.stdout).trim()));
     }
 
     Err(format!("PaddleOCR unavailable: {}", errors.join(" | ")))
+}
+
+fn should_fallback_to_paddle_cli(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("failed to spawn paddle sidecar")
+        || lower.contains("paddle sidecar stdin unavailable")
+        || lower.contains("paddle sidecar stdout unavailable")
+        || lower.contains("paddle sidecar exited during startup")
+        || lower.contains("paddle sidecar exited while recognizing")
+        || lower.contains("ocr worker unavailable")
 }
 
 fn recognize_with_worker(image_path: &str) -> Result<OcrResult, String> {
@@ -251,6 +267,14 @@ fn parse_paddleocr_output(output: &str) -> Result<OcrResult, String> {
         }
     }
 
+    if full_text.is_empty() {
+        let trimmed = output.trim();
+        if trimmed.is_empty() {
+            return Err("PaddleOCR returned empty output".to_string());
+        }
+        return Err("PaddleOCR returned no parseable text".to_string());
+    }
+
     Ok(OcrResult {
         text: full_text,
         regions,
@@ -293,6 +317,7 @@ fn try_command(
     errors: &mut Vec<String>,
 ) -> Option<std::process::Output> {
     match hidden_command(program)
+        .envs(paddle_runtime_env_vars())
         .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         .env("FLAGS_enable_pir_api", "0")
         .args(args)
@@ -325,6 +350,48 @@ fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     command
+}
+
+fn paddle_runtime_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Caprail")
+        .join("paddle-runtime")
+}
+
+fn ensure_paddle_runtime_dirs() -> Result<PathBuf, String> {
+    let runtime_dir = paddle_runtime_dir();
+    std::fs::create_dir_all(runtime_dir.join("cache"))
+        .map_err(|e| format!("Failed to create Paddle cache directory: {e}"))?;
+    std::fs::create_dir_all(runtime_dir.join("temp"))
+        .map_err(|e| format!("Failed to create Paddle temp directory: {e}"))?;
+    Ok(runtime_dir)
+}
+
+fn paddle_runtime_env_vars() -> Vec<(String, String)> {
+    let runtime_dir = match ensure_paddle_runtime_dirs() {
+        Ok(path) => path,
+        Err(_) => paddle_runtime_dir(),
+    };
+    let cache_dir = runtime_dir.join("cache");
+    let temp_dir = runtime_dir.join("temp");
+
+    vec![
+        (
+            "PADDLE_PDX_CACHE_HOME".to_string(),
+            cache_dir.to_string_lossy().to_string(),
+        ),
+        ("TMP".to_string(), temp_dir.to_string_lossy().to_string()),
+        ("TEMP".to_string(), temp_dir.to_string_lossy().to_string()),
+        (
+            "MODELSCOPE_CACHE".to_string(),
+            cache_dir.join("modelscope").to_string_lossy().to_string(),
+        ),
+        (
+            "HUGGINGFACE_HUB_CACHE".to_string(),
+            cache_dir.join("huggingface").to_string_lossy().to_string(),
+        ),
+    ]
 }
 
 fn command_available(program: &str, args: &[&str]) -> bool {
@@ -479,6 +546,7 @@ fn create_windows_ocr_engine() -> Result<windows::Media::Ocr::OcrEngine, String>
 
 fn python_module_available(program: &str, args: &[&str]) -> bool {
     hidden_command(program)
+        .envs(paddle_runtime_env_vars())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .args(args)
@@ -487,9 +555,14 @@ fn python_module_available(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct WorkerRequest<'a> {
     image_path: &'a str,
+}
+
+#[derive(Deserialize)]
+struct WorkerRequestOwned {
+    image_path: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -534,8 +607,8 @@ fn run_paddle_sidecar() -> Result<(), String> {
             continue;
         }
 
-        let payload = match serde_json::from_str::<WorkerRequest<'_>>(raw) {
-            Ok(request) => match worker.recognize(request.image_path) {
+        let payload = match serde_json::from_str::<WorkerRequestOwned>(raw) {
+            Ok(request) => match worker.recognize(&request.image_path) {
                 Ok(result) => WorkerResponse {
                     ok: true,
                     text: Some(result.text),
@@ -702,6 +775,7 @@ impl PythonPaddleWorker {
 
     fn spawn_with(program: &str, args: &[&str]) -> Result<Self, String> {
         let mut child = hidden_command(program)
+            .envs(paddle_runtime_env_vars())
             .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
             .env("FLAGS_enable_pir_api", "0")
             .stdin(Stdio::piped())

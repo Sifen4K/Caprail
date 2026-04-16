@@ -8,12 +8,13 @@ use std::{
 
 use crate::{capture::SCREENSHOT_STORE, config::load_config_sync};
 
-static OCR_WORKER: Lazy<Mutex<Option<PaddleOcrWorker>>> = Lazy::new(|| Mutex::new(None));
+static OCR_WORKER: Lazy<Mutex<Option<PaddleSidecar>>> = Lazy::new(|| Mutex::new(None));
 const OCR_READY_PREFIX: &str = "__CAPRAIL_OCR_READY__";
 const OCR_RESULT_PREFIX: &str = "__CAPRAIL_OCR_RESULT__";
 const OCR_ENGINE_WINDOWS: &str = "windows";
 const OCR_ENGINE_PADDLE: &str = "paddle";
 const OCR_ENGINE_TESSERACT: &str = "tesseract";
+const PADDLE_SIDECAR_ARG: &str = "--paddle-sidecar";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrResult {
@@ -205,7 +206,7 @@ fn run_paddleocr(image_path: &std::path::Path) -> Result<OcrResult, String> {
 fn recognize_with_worker(image_path: &str) -> Result<OcrResult, String> {
     let mut worker = OCR_WORKER.lock().unwrap();
     if worker.is_none() {
-        *worker = Some(PaddleOcrWorker::spawn()?);
+        *worker = Some(PaddleSidecar::spawn()?);
     }
 
     if let Some(instance) = worker.as_mut() {
@@ -315,7 +316,7 @@ fn try_command(
     }
 }
 
-fn hidden_command(program: &str) -> Command {
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     #[cfg(windows)]
     {
@@ -398,7 +399,7 @@ fn paddle_ocr_available() -> bool {
 fn ensure_ocr_worker() -> Result<(), String> {
     let mut worker = OCR_WORKER.lock().unwrap();
     if worker.is_none() {
-        *worker = Some(PaddleOcrWorker::spawn()?);
+        *worker = Some(PaddleSidecar::spawn()?);
     }
     Ok(())
 }
@@ -486,12 +487,12 @@ fn python_module_available(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct WorkerRequest<'a> {
     image_path: &'a str,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct WorkerResponse {
     ok: bool,
     text: Option<String>,
@@ -499,13 +500,185 @@ struct WorkerResponse {
     error: Option<String>,
 }
 
-struct PaddleOcrWorker {
+pub fn maybe_run_paddle_sidecar_from_args() -> bool {
+    if std::env::args().any(|arg| arg == PADDLE_SIDECAR_ARG) {
+        if let Err(error) = run_paddle_sidecar() {
+            eprintln!("Paddle sidecar failed: {error}");
+            std::process::exit(1);
+        }
+        return true;
+    }
+
+    false
+}
+
+fn run_paddle_sidecar() -> Result<(), String> {
+    let mut worker = PythonPaddleWorker::spawn()?;
+    println!("{OCR_READY_PREFIX}");
+
+    let stdin = std::io::stdin();
+    let mut stdin = stdin.lock();
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let bytes = stdin
+            .read_line(&mut line)
+            .map_err(|e| format!("Failed to read sidecar request: {e}"))?;
+        if bytes == 0 {
+            return Ok(());
+        }
+
+        let raw = line.trim();
+        if raw.is_empty() {
+            continue;
+        }
+
+        let payload = match serde_json::from_str::<WorkerRequest<'_>>(raw) {
+            Ok(request) => match worker.recognize(request.image_path) {
+                Ok(result) => WorkerResponse {
+                    ok: true,
+                    text: Some(result.text),
+                    regions: Some(result.regions),
+                    error: None,
+                },
+                Err(error) => WorkerResponse {
+                    ok: false,
+                    text: None,
+                    regions: None,
+                    error: Some(error),
+                },
+            },
+            Err(error) => WorkerResponse {
+                ok: false,
+                text: None,
+                regions: None,
+                error: Some(format!("Invalid sidecar request: {error}")),
+            },
+        };
+
+        let response = serde_json::to_string(&payload)
+            .map_err(|e| format!("Failed to serialize sidecar response: {e}"))?;
+        println!("{OCR_RESULT_PREFIX}{response}");
+    }
+}
+
+struct PaddleSidecar {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
 }
 
-impl PaddleOcrWorker {
+impl PaddleSidecar {
+    fn spawn() -> Result<Self, String> {
+        let current_exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to resolve sidecar path: {e}"))?;
+        let mut child = hidden_command(current_exe)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .arg(PADDLE_SIDECAR_ARG)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn Paddle sidecar: {e}"))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Paddle sidecar stdin unavailable".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Paddle sidecar stdout unavailable".to_string())?;
+        let mut worker = Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        };
+        worker.wait_until_ready()?;
+        Ok(worker)
+    }
+
+    fn wait_until_ready(&mut self) -> Result<(), String> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes = self
+                .stdout
+                .read_line(&mut line)
+                .map_err(|e| format!("Failed to read Paddle sidecar startup: {e}"))?;
+            if bytes == 0 {
+                let status = self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown status".to_string());
+                return Err(format!("Paddle sidecar exited during startup: {status}"));
+            }
+
+            if line.trim() == OCR_READY_PREFIX {
+                return Ok(());
+            }
+        }
+    }
+
+    fn recognize(&mut self, image_path: &str) -> Result<OcrResult, String> {
+        let request = serde_json::to_string(&WorkerRequest { image_path })
+            .map_err(|e| format!("Failed to serialize Paddle sidecar request: {e}"))?;
+        writeln!(self.stdin, "{request}")
+            .and_then(|_| self.stdin.flush())
+            .map_err(|e| format!("Failed to send Paddle sidecar request: {e}"))?;
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes = self
+                .stdout
+                .read_line(&mut line)
+                .map_err(|e| format!("Failed to read Paddle sidecar response: {e}"))?;
+            if bytes == 0 {
+                let status = self
+                    .child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown status".to_string());
+                return Err(format!("Paddle sidecar exited while recognizing: {status}"));
+            }
+
+            if let Some(payload) = line.trim().strip_prefix(OCR_RESULT_PREFIX) {
+                let response: WorkerResponse = serde_json::from_str(payload)
+                    .map_err(|e| format!("Invalid Paddle sidecar response: {e}"))?;
+                if response.ok {
+                    return Ok(OcrResult {
+                        text: response.text.unwrap_or_default(),
+                        regions: response.regions.unwrap_or_default(),
+                    });
+                }
+                return Err(response
+                    .error
+                    .unwrap_or_else(|| "Paddle sidecar failed".to_string()));
+            }
+        }
+    }
+}
+
+impl Drop for PaddleSidecar {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+struct PythonPaddleWorker {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl PythonPaddleWorker {
     fn spawn() -> Result<Self, String> {
         let mut errors = Vec::new();
 
@@ -622,7 +795,7 @@ impl PaddleOcrWorker {
     }
 }
 
-impl Drop for PaddleOcrWorker {
+impl Drop for PythonPaddleWorker {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();

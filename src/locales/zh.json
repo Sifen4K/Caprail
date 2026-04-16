@@ -31,9 +31,9 @@
     "unavailable": "不可用",
     "shortcutPlaceholder": "按下快捷键...",
     "ocrEngineOptions": {
-      "windows": "Windows OCR",
-      "paddle": "PaddleOCR",
-      "tesseract": "Tesseract"
+      "windows": "Windows OCR（速度快）",
+      "paddle": "PaddleOCR（中文推荐）",
+      "tesseract": "Tesseract（兼容兜底）"
     },
     "validation": {
       "bothRequired": "快捷键不能为空！",

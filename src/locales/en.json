@@ -31,9 +31,9 @@
     "unavailable": "Unavailable",
     "shortcutPlaceholder": "Press shortcut...",
     "ocrEngineOptions": {
-      "windows": "Windows OCR",
-      "paddle": "PaddleOCR",
-      "tesseract": "Tesseract"
+      "windows": "Windows OCR (fast)",
+      "paddle": "PaddleOCR (best for Chinese)",
+      "tesseract": "Tesseract (fallback)"
     },
     "validation": {
       "bothRequired": "Both shortcuts must be set!",

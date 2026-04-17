@@ -1,6 +1,6 @@
 [package]
 name = "caprail"
-version = "0.1.0"
+version = "0.1.2"
 description = "A screenshot and screen recording tool for Windows"
 authors = ["you"]
 edition = "2021"

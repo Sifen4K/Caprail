@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tauri::ipc::Response;
 use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tracing::{info, warn};
 
 // ── In-memory recording store ────────────────────────────────────────
 // Frames live in RAM until the user exports or closes the editor.
@@ -232,6 +233,17 @@ async fn close_window_if_exists(app: &tauri::AppHandle, label: &str) {
     }
 }
 
+fn try_exclude_window_from_capture(app: &tauri::AppHandle, label: &str) {
+    if let Err(err) =
+        crate::capture::set_window_exclude_from_capture(app.clone(), label.to_string())
+    {
+        warn!(
+            "Failed to exclude '{}' from capture; continuing without exclusion: {}",
+            label, err
+        );
+    }
+}
+
 fn build_recording_window(
     app: &tauri::AppHandle,
     label: &str,
@@ -259,6 +271,18 @@ pub async fn start_recording_workflow(
     app: tauri::AppHandle,
     workflow: RecordingWorkflowConfig,
 ) -> Result<(), String> {
+    info!(
+        "Starting recording workflow: area=({}, {}) {}x{}, control=({}, {}) {}x{}",
+        workflow.recording.x,
+        workflow.recording.y,
+        workflow.recording.width,
+        workflow.recording.height,
+        workflow.control.x,
+        workflow.control.y,
+        workflow.control.width,
+        workflow.control.height
+    );
+
     close_window_if_exists(&app, "record-indicator").await;
     close_window_if_exists(&app, "record-control").await;
     if let Some(window) = app.get_webview_window("clip-editor") {
@@ -291,10 +315,13 @@ pub async fn start_recording_workflow(
     ) {
         Ok(window) => window,
         Err(err) => {
+            warn!("Failed to create record-indicator window: {}", err);
             let _ = clip_editor.close();
             return Err(err);
         }
     };
+
+    info!("Created record-indicator window");
 
     let mut recording_started = false;
     let setup_result = async {
@@ -310,18 +337,25 @@ pub async fn start_recording_workflow(
                 workflow.recording.y,
             ))
             .map_err(|e| e.to_string())?;
+        info!(
+            "Applied record-indicator geometry: pos=({}, {}), size={}x{}",
+            workflow.recording.x,
+            workflow.recording.y,
+            workflow.recording.width.max(1),
+            workflow.recording.height.max(1)
+        );
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         crate::capture::lock_window_position(app.clone(), "record-indicator".to_string())?;
-        crate::capture::set_window_exclude_from_capture(
-            app.clone(),
-            "record-indicator".to_string(),
-        )?;
+        info!("Locked record-indicator window position");
+        try_exclude_window_from_capture(&app, "record-indicator");
         indicator
             .set_ignore_cursor_events(true)
             .map_err(|e| e.to_string())?;
+        info!("Set record-indicator to ignore cursor events");
 
         start_recording(workflow.recording.clone())?;
         recording_started = true;
+        info!("Recording session started");
 
         let control = build_recording_window(
             &app,
@@ -330,6 +364,7 @@ pub async fn start_recording_workflow(
             "Recording",
             true,
         )?;
+        info!("Created record-control window");
         control
             .set_size(PhysicalSize::new(
                 workflow.control.width.max(1),
@@ -339,16 +374,22 @@ pub async fn start_recording_workflow(
         control
             .set_position(PhysicalPosition::new(workflow.control.x, workflow.control.y))
             .map_err(|e| e.to_string())?;
-        crate::capture::set_window_exclude_from_capture(
-            app.clone(),
-            "record-control".to_string(),
-        )?;
+        info!(
+            "Applied record-control geometry: pos=({}, {}), size={}x{}",
+            workflow.control.x,
+            workflow.control.y,
+            workflow.control.width.max(1),
+            workflow.control.height.max(1)
+        );
+        try_exclude_window_from_capture(&app, "record-control");
+        info!("Recording workflow setup complete");
 
         Ok::<(), String>(())
     }
     .await;
 
     if let Err(err) = setup_result {
+        warn!("Recording workflow failed during setup: {}", err);
         let _ = app.emit("recording-cancelled", ());
         let _ = app.get_webview_window("record-control").map(|window| window.close());
         let _ = indicator.close();
@@ -375,6 +416,8 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
     let width = ((config.width + 1) & !1) as u32;
     let height = ((config.height + 1) & !1) as u32;
     let fps = config.fps;
+    let origin_x = config.x;
+    let origin_y = config.y;
 
     let stop_signal = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
@@ -417,7 +460,9 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
     *session_guard = Some(session);
 
     tracing::info!(
-        "Recording started (in-memory): {}x{} @ {}fps",
+        "Recording started (in-memory): origin=({}, {}), {}x{} @ {}fps",
+        origin_x,
+        origin_y,
         width,
         height,
         fps
@@ -441,6 +486,11 @@ fn capture_loop(
 
     let frame_duration = std::time::Duration::from_secs_f64(1.0 / config.fps as f64);
     let frame_size = (config.width * config.height * 4) as usize;
+
+    info!(
+        "Capture loop starting: origin=({}, {}), {}x{}, target_fps={}",
+        config.x, config.y, config.width, config.height, config.fps
+    );
 
     unsafe {
         let hdc_screen = GetDC(None);
@@ -510,6 +560,13 @@ fn capture_loop(
         let _ = DeleteDC(hdc_mem);
         ReleaseDC(None, hdc_screen);
     }
+
+    info!(
+        "Capture loop exited: origin=({}, {}), captured_frames={}",
+        config.x,
+        config.y,
+        frame_count.load(Ordering::SeqCst)
+    );
 }
 
 #[cfg(not(windows))]
@@ -529,6 +586,11 @@ fn capture_loop(
 pub fn stop_recording(app: tauri::AppHandle) -> Result<RecordingEditorSession, String> {
     let editor_session = shutdown_recording_session(true)?
         .ok_or("Not recording".to_string())?;
+    info!(
+        "Emitting recording-stopped: frames={}, duration_secs={:.2}",
+        editor_session.frame_count,
+        editor_session.duration_secs
+    );
     let _ = app.emit("recording-stopped", &editor_session);
     Ok(editor_session)
 }

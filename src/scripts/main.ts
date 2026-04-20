@@ -372,6 +372,10 @@ async function setup() {
       } catch (err) {
         updateStatus(`Recording error: ${err}`);
         isCapturing = false;
+        await message(String(err), {
+          title: "Recording Error",
+          kind: "error",
+        });
       }
     }
   );

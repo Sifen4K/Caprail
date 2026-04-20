@@ -1,6 +1,8 @@
 use tauri::Emitter;
 use tracing::{error, info};
 
+const LOG_RETENTION_DAYS: u64 = 14;
+
 mod capture;
 mod config;
 mod export;
@@ -12,6 +14,55 @@ pub use config::*;
 pub use export::*;
 pub use ocr::*;
 pub use recording::*;
+
+fn cleanup_old_log_files(log_dir: &std::path::Path) {
+    let cutoff = std::time::Duration::from_secs(LOG_RETENTION_DAYS * 24 * 60 * 60);
+    let now = std::time::SystemTime::now();
+
+    let entries = match std::fs::read_dir(log_dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            error!("Failed to read log directory '{}': {}", log_dir.display(), err);
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if !file_name.starts_with("caprail.log") {
+            continue;
+        }
+
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+
+        let Ok(modified_time) = metadata.modified() else {
+            continue;
+        };
+
+        let Ok(age) = now.duration_since(modified_time) else {
+            continue;
+        };
+
+        if age <= cutoff {
+            continue;
+        }
+
+        match std::fs::remove_file(&path) {
+            Ok(_) => info!("Deleted expired log file: {}", path.display()),
+            Err(err) => error!("Failed to delete expired log file '{}': {}", path.display(), err),
+        }
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,6 +81,7 @@ pub fn run() {
         .join("Caprail")
         .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
+    cleanup_old_log_files(&log_dir);
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "caprail.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
@@ -41,6 +93,11 @@ pub fn run() {
         .init();
 
     info!("Starting Caprail v{}", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Logging to '{}' with retention {} days",
+        log_dir.display(),
+        LOG_RETENTION_DAYS
+    );
 
     // Clean up stale temp files from previous sessions
     let temp_dir = capture::screenshot_temp_dir();

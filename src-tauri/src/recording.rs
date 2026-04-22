@@ -194,6 +194,12 @@ fn shutdown_recording_session(
     let frame_count = completed_frames.len();
 
     if store_completed {
+        if completed_frames.is_empty() {
+            *COMPLETED_RECORDING.write().unwrap() = None;
+            warn!("Recording stopped without any captured frames");
+            return Err("No frames were captured. Another recorder may be blocking screen capture.".to_string());
+        }
+
         let completed = CompletedRecording {
             width: session.width,
             height: session.height,
@@ -410,6 +416,14 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
     let mut session_guard = SESSION.lock().unwrap();
     if session_guard.is_some() {
         return Err("Already recording".to_string());
+    }
+
+    {
+        let mut completed_store = COMPLETED_RECORDING.write().unwrap();
+        if completed_store.is_some() {
+            *completed_store = None;
+            info!("Cleared previous completed recording before starting a new session");
+        }
     }
 
     // Round to even dimensions (required for H.264 export later)

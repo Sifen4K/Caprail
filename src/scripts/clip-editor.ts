@@ -47,6 +47,7 @@ let playbackSpeed = 1.0;
 let lastFrameTime = 0;
 let animFrameId = 0;
 let pendingPlaybackFrame: number | null = null;
+let recordingGeneration = 0;
 
 // ── Unified drag state ────────────────────────────────────────────────
 type DragMode = null | "scrub" | "trim-start" | "trim-end";
@@ -64,6 +65,9 @@ const MAX_INFLIGHT = 4;
 // ── Initialization ────────────────────────────────────────────────────
 
 async function loadRecording() {
+  resetRecordingState();
+  const generation = recordingGeneration;
+
   try {
     const info = await invoke<{
       width: number;
@@ -84,6 +88,10 @@ async function loadRecording() {
     trimStartFrame = info.trimStartFrame;
     trimEndFrame = info.trimEndFrame;
     currentFrame = Math.min(currentFrame, info.terminalFrame);
+
+    if (generation !== recordingGeneration) {
+      return;
+    }
 
     canvas.width = videoWidth;
     canvas.height = videoHeight;
@@ -123,10 +131,16 @@ async function fetchFrame(frameIndex: number): Promise<ImageData | null> {
   }
 
   const request = (async () => {
+    const generation = recordingGeneration;
+
     try {
       const buffer = await invoke<ArrayBuffer>("read_recording_frame", {
         frameIndex,
       });
+
+      if (generation !== recordingGeneration) {
+        return null;
+      }
 
       const bytes = new Uint8ClampedArray(buffer);
       const imageData = new ImageData(bytes, videoWidth, videoHeight);
@@ -228,6 +242,22 @@ function prefetchFrames(fromFrame: number) {
 
 let pendingSeekFrame: number | null = null;
 let seekInProgress = false;
+
+function resetRecordingState() {
+  recordingGeneration += 1;
+  stopPlayback();
+  dragMode = null;
+  pendingSeekFrame = null;
+  seekInProgress = false;
+  frameCache.clear();
+  pendingFetches.clear();
+  currentFrame = 0;
+  trimStartFrame = 0;
+  trimEndFrame = 0;
+  totalFrames = 0;
+  duration = 0;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

@@ -171,10 +171,10 @@ canvas.addEventListener("mouseup", async () => {
     const selection = toSelectionRect(desktopRect);
 
     await emit("recording-area-selected", {
-      x: selection.x,
-      y: selection.y,
-      width: selection.width,
-      height: selection.height,
+      x: Math.round(selection.x),
+      y: Math.round(selection.y),
+      width: Math.round(selection.width),
+      height: Math.round(selection.height),
     });
     // Do not close here — main.ts will close this window and wait for
     // its destruction before starting the recording, avoiding the race

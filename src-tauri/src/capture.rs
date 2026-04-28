@@ -95,6 +95,20 @@ pub fn lock_window_position(app: tauri::AppHandle, label: String) -> Result<(), 
     Ok(())
 }
 
+#[tauri::command]
+pub fn flush_desktop_composition() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Graphics::Dwm::DwmFlush;
+
+        unsafe {
+            DwmFlush().map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub title: String,

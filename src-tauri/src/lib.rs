@@ -210,6 +210,7 @@ pub fn run() {
             capture::crop_precapture,
             capture::lock_window_position,
             capture::capture_window,
+            capture::flush_desktop_composition,
             capture::get_windows,
             capture::get_monitors,
             capture::read_screenshot,

@@ -348,6 +348,9 @@ async function setup() {
           overlayWindow.close();
         });
       }
+      await invoke("flush_desktop_composition").catch((err) => {
+        console.warn("Failed to flush desktop composition before recording:", err);
+      });
 
       try {
         await resolution.refresh().catch(() => {});

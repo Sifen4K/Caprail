@@ -93,6 +93,8 @@
     "title": "Recording Editor",
     "play": "Play",
     "speed": "Speed:",
+    "systemAudio": "System Audio",
+    "microphone": "Mic",
     "exportMp4": "Export MP4",
     "exportGif": "Export GIF"
   },

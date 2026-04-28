@@ -3,6 +3,7 @@ use tracing::{error, info};
 
 const LOG_RETENTION_DAYS: u64 = 14;
 
+mod audio;
 mod capture;
 mod config;
 mod export;
@@ -22,7 +23,11 @@ fn cleanup_old_log_files(log_dir: &std::path::Path) {
     let entries = match std::fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(err) => {
-            error!("Failed to read log directory '{}': {}", log_dir.display(), err);
+            error!(
+                "Failed to read log directory '{}': {}",
+                log_dir.display(),
+                err
+            );
             return;
         }
     };
@@ -59,7 +64,11 @@ fn cleanup_old_log_files(log_dir: &std::path::Path) {
 
         match std::fs::remove_file(&path) {
             Ok(_) => info!("Deleted expired log file: {}", path.display()),
-            Err(err) => error!("Failed to delete expired log file '{}': {}", path.display(), err),
+            Err(err) => error!(
+                "Failed to delete expired log file '{}': {}",
+                path.display(),
+                err
+            ),
         }
     }
 }
@@ -230,6 +239,7 @@ pub fn run() {
             recording::get_recording_info,
             recording::get_recording_editor_session,
             recording::read_recording_frame,
+            recording::get_recording_audio_track_path,
             recording::cleanup_recording,
             export::prepare_export_video,
             export::export_video,

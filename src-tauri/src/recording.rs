@@ -29,6 +29,8 @@ pub struct RecordingEditorSession {
     pub trim_start_frame: u32,
     pub trim_end_frame: u32,
     pub terminal_frame: u32,
+    pub system_audio_available: bool,
+    pub mic_available: bool,
 }
 
 pub struct CompletedRecording {
@@ -36,6 +38,7 @@ pub struct CompletedRecording {
     pub height: u32,
     pub fps: u32,
     pub frames: Vec<Vec<u8>>, // BGRA pixel data per frame
+    pub audio_tracks: Vec<crate::audio::CompletedAudioTrack>,
 }
 
 pub static COMPLETED_RECORDING: once_cell::sync::Lazy<RwLock<Option<CompletedRecording>>> =
@@ -58,7 +61,15 @@ fn build_recording_editor_session(rec: &CompletedRecording) -> RecordingEditorSe
         trim_start_frame: 0,
         trim_end_frame: frame_count,
         terminal_frame: frame_count.saturating_sub(1),
+        system_audio_available: has_audio_track(rec, crate::audio::AudioTrackKind::System),
+        mic_available: has_audio_track(rec, crate::audio::AudioTrackKind::Mic),
     }
+}
+
+fn has_audio_track(rec: &CompletedRecording, kind: crate::audio::AudioTrackKind) -> bool {
+    rec.audio_tracks
+        .iter()
+        .any(|track| track.kind == kind && track.available && track.path.exists())
 }
 
 #[tauri::command]
@@ -104,12 +115,31 @@ pub fn read_recording_frame(frame_index: u32) -> Result<Response, String> {
     Ok(Response::new(frame_data))
 }
 
+#[tauri::command]
+pub fn get_recording_audio_track_path(kind: String) -> Result<String, String> {
+    let track_kind = match kind.as_str() {
+        "system" => crate::audio::AudioTrackKind::System,
+        "mic" => crate::audio::AudioTrackKind::Mic,
+        other => return Err(format!("Unsupported audio track kind: {}", other)),
+    };
+
+    let store = COMPLETED_RECORDING.read().unwrap();
+    let rec = store.as_ref().ok_or("No recording available")?;
+    let track = rec
+        .audio_tracks
+        .iter()
+        .find(|track| track.kind == track_kind && track.available && track.path.exists())
+        .ok_or_else(|| format!("Audio track not available: {}", kind))?;
+
+    Ok(track.path.to_string_lossy().to_string())
+}
+
 /// Frees the in-memory recording frames.
 #[tauri::command]
 pub fn cleanup_recording() -> Result<(), String> {
     let mut store = COMPLETED_RECORDING.write().unwrap();
-    if store.is_some() {
-        *store = None;
+    if let Some(recording) = store.take() {
+        crate::audio::cleanup_audio_track_files(&recording.audio_tracks);
         tracing::info!("Recording frames cleared from memory");
     }
     Ok(())
@@ -117,8 +147,8 @@ pub fn cleanup_recording() -> Result<(), String> {
 
 fn clear_completed_recording(reason: &str) {
     let mut store = COMPLETED_RECORDING.write().unwrap();
-    if store.is_some() {
-        *store = None;
+    if let Some(recording) = store.take() {
+        crate::audio::cleanup_audio_track_files(&recording.audio_tracks);
         info!("Cleared previous completed recording {}", reason);
     }
 }
@@ -174,6 +204,7 @@ struct RecordingSession {
     #[allow(dead_code)]
     config: RecordingConfig,
     capture_thread: Option<std::thread::JoinHandle<()>>,
+    audio_session: Option<crate::audio::AudioCaptureSession>,
     paused: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     frames: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -190,6 +221,7 @@ fn shutdown_recording_session(
 
     session.stop_signal.store(true, Ordering::SeqCst);
     let capture_handle = session.capture_thread.take();
+    let audio_session = session.audio_session.take();
 
     // Drop session guard before joining thread to avoid deadlock
     drop(session_guard);
@@ -197,15 +229,22 @@ fn shutdown_recording_session(
     if let Some(handle) = capture_handle {
         let _ = handle.join();
     }
+    let audio_tracks = audio_session
+        .map(|session| session.stop().into_iter().collect::<Vec<_>>())
+        .unwrap_or_default();
 
     let completed_frames = std::mem::take(&mut *session.frames.lock().unwrap());
     let frame_count = completed_frames.len();
 
     if store_completed {
         if completed_frames.is_empty() {
+            crate::audio::cleanup_audio_track_files(&audio_tracks);
             *COMPLETED_RECORDING.write().unwrap() = None;
             warn!("Recording stopped without any captured frames");
-            return Err("No frames were captured. Another recorder may be blocking screen capture.".to_string());
+            return Err(
+                "No frames were captured. Another recorder may be blocking screen capture."
+                    .to_string(),
+            );
         }
 
         let completed = CompletedRecording {
@@ -213,6 +252,7 @@ fn shutdown_recording_session(
             height: session.height,
             fps: session.fps,
             frames: completed_frames,
+            audio_tracks,
         };
         let editor_session = build_recording_editor_session(&completed);
 
@@ -227,6 +267,7 @@ fn shutdown_recording_session(
 
         Ok(Some(editor_session))
     } else {
+        crate::audio::cleanup_audio_track_files(&audio_tracks);
         *COMPLETED_RECORDING.write().unwrap() = None;
 
         tracing::info!(
@@ -388,7 +429,10 @@ pub async fn start_recording_workflow(
             ))
             .map_err(|e| e.to_string())?;
         control
-            .set_position(PhysicalPosition::new(workflow.control.x, workflow.control.y))
+            .set_position(PhysicalPosition::new(
+                workflow.control.x,
+                workflow.control.y,
+            ))
             .map_err(|e| e.to_string())?;
         info!(
             "Applied record-control geometry: pos=({}, {}), size={}x{}",
@@ -407,7 +451,9 @@ pub async fn start_recording_workflow(
     if let Err(err) = setup_result {
         warn!("Recording workflow failed during setup: {}", err);
         let _ = app.emit("recording-cancelled", ());
-        let _ = app.get_webview_window("record-control").map(|window| window.close());
+        let _ = app
+            .get_webview_window("record-control")
+            .map(|window| window.close());
         let _ = indicator.close();
         let _ = clip_editor.close();
         if recording_started {
@@ -459,6 +505,7 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
             thread_frames,
         );
     });
+    let audio_session = Some(crate::audio::start_default_audio_capture(paused.clone()));
 
     let session = RecordingSession {
         width,
@@ -470,6 +517,7 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
         frame_count,
         config,
         capture_thread: Some(handle),
+        audio_session,
         paused,
         stop_signal,
         frames,
@@ -602,12 +650,10 @@ fn capture_loop(
 
 #[tauri::command]
 pub fn stop_recording(app: tauri::AppHandle) -> Result<RecordingEditorSession, String> {
-    let editor_session = shutdown_recording_session(true)?
-        .ok_or("Not recording".to_string())?;
+    let editor_session = shutdown_recording_session(true)?.ok_or("Not recording".to_string())?;
     info!(
         "Emitting recording-stopped: frames={}, duration_secs={:.2}",
-        editor_session.frame_count,
-        editor_session.duration_secs
+        editor_session.frame_count, editor_session.duration_secs
     );
     let _ = app.emit("recording-stopped", &editor_session);
     Ok(editor_session)
@@ -701,6 +747,7 @@ mod tests {
             height: 1080,
             fps: 30,
             frames: vec![vec![0; 4]; 10],
+            audio_tracks: Vec::new(),
         };
 
         let session = build_recording_editor_session(&recording);
@@ -718,6 +765,7 @@ mod tests {
             height: 1,
             fps: 30,
             frames: Vec::new(),
+            audio_tracks: Vec::new(),
         };
 
         let session = build_recording_editor_session(&recording);

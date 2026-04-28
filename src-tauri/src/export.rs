@@ -3,7 +3,9 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
+use tracing::info;
 
+use crate::audio::AudioTrackKind;
 use crate::recording::COMPLETED_RECORDING;
 
 static EXPORTING: AtomicBool = AtomicBool::new(false);
@@ -18,6 +20,8 @@ pub struct ExportConfig {
     pub format: String, // "mp4" or "gif"
     pub gif_fps: Option<u32>,
     pub gif_max_width: Option<u32>,
+    pub include_system_audio: Option<bool>,
+    pub include_mic_audio: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,10 +131,14 @@ fn validate_export_config(
         "mp4" => {
             config.gif_fps = None;
             config.gif_max_width = None;
+            config.include_system_audio = Some(config.include_system_audio.unwrap_or(true));
+            config.include_mic_audio = Some(config.include_mic_audio.unwrap_or(true));
         }
         "gif" => {
             config.gif_fps = Some(config.gif_fps.unwrap_or(15).max(1));
             config.gif_max_width = Some(config.gif_max_width.unwrap_or(640).max(1));
+            config.include_system_audio = Some(false);
+            config.include_mic_audio = Some(false);
         }
         other => return Err(format!("Unsupported export format: {}", other)),
     }
@@ -182,9 +190,23 @@ fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
         "pipe:0".to_string(),
     ];
 
-    if !vf_filters.is_empty() {
-        args.extend(["-vf".to_string(), vf_filters.join(",")]);
+    let audio_inputs = selected_audio_inputs(config);
+    info!(
+        "MP4 export audio selection: include_system_audio={:?}, include_mic_audio={:?}, inputs={:?}",
+        config.include_system_audio, config.include_mic_audio, audio_inputs
+    );
+    for (_, path) in &audio_inputs {
+        args.extend([
+            "-ss".to_string(),
+            frame_to_secs(config.start_frame, fps).to_string(),
+            "-t".to_string(),
+            export_duration_secs(config, fps).to_string(),
+            "-i".to_string(),
+            path.clone(),
+        ]);
     }
+
+    append_mp4_filters_and_maps(&mut args, &vf_filters, &audio_inputs, config.speed);
 
     args.extend([
         "-c:v".to_string(),
@@ -195,8 +217,16 @@ fn export_mp4(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
         "23".to_string(),
         "-pix_fmt".to_string(),
         "yuv420p".to_string(),
-        config.output_path.clone(),
     ]);
+    if !audio_inputs.is_empty() {
+        args.extend([
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            "192k".to_string(),
+        ]);
+    }
+    args.push(config.output_path.clone());
 
     pipe_frames_to_ffmpeg(app, config, total_frames, &args, 0.0, 1.0)
 }
@@ -265,7 +295,10 @@ fn export_gif(app: &AppHandle, config: &ExportConfig) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{selected_frame_count, validate_export_config, ExportConfig};
+    use super::{
+        append_mp4_filters_and_maps, atempo_filter, selected_frame_count, validate_export_config,
+        ExportConfig,
+    };
 
     fn make_config(start_frame: u32, end_frame: u32) -> ExportConfig {
         ExportConfig {
@@ -276,6 +309,8 @@ mod tests {
             format: "mp4".to_string(),
             gif_fps: None,
             gif_max_width: None,
+            include_system_audio: Some(true),
+            include_mic_audio: Some(true),
         }
     }
 
@@ -303,6 +338,8 @@ mod tests {
             format: "gif".to_string(),
             gif_fps: None,
             gif_max_width: None,
+            include_system_audio: None,
+            include_mic_audio: None,
         };
 
         let validated = validate_export_config(config, 10).expect("gif config should validate");
@@ -329,6 +366,207 @@ mod tests {
 
         assert!(err.contains("Playback speed must be greater than 0"));
     }
+
+    #[test]
+    fn validate_export_config_defaults_mp4_audio_on() {
+        let mut config = make_config(0, 10);
+        config.include_system_audio = None;
+        config.include_mic_audio = None;
+
+        let validated = validate_export_config(config, 10).unwrap();
+
+        assert_eq!(validated.include_system_audio, Some(true));
+        assert_eq!(validated.include_mic_audio, Some(true));
+    }
+
+    #[test]
+    fn validate_export_config_disables_gif_audio() {
+        let mut config = make_config(0, 10);
+        config.format = "gif".to_string();
+        config.include_system_audio = Some(true);
+        config.include_mic_audio = Some(true);
+
+        let validated = validate_export_config(config, 10).unwrap();
+
+        assert_eq!(validated.include_system_audio, Some(false));
+        assert_eq!(validated.include_mic_audio, Some(false));
+    }
+
+    #[test]
+    fn atempo_filter_handles_supported_speeds() {
+        assert_eq!(atempo_filter(0.5), Some("atempo=0.5".to_string()));
+        assert_eq!(atempo_filter(1.0), None);
+        assert_eq!(atempo_filter(2.0), Some("atempo=2".to_string()));
+        assert_eq!(atempo_filter(4.0), Some("atempo=2,atempo=2".to_string()));
+    }
+
+    #[test]
+    fn mp4_args_map_no_audio_when_no_inputs() {
+        let mut args = Vec::new();
+        append_mp4_filters_and_maps(&mut args, &[], &[], 1.0);
+
+        let joined = args.join(" ");
+        assert!(joined.contains("-map 0:v"));
+        assert!(!joined.contains("[aout]"));
+    }
+
+    #[test]
+    fn mp4_args_mix_two_audio_inputs() {
+        let mut args = Vec::new();
+        append_mp4_filters_and_maps(
+            &mut args,
+            &[],
+            &[
+                ("system".to_string(), "system.wav".to_string()),
+                ("mic".to_string(), "mic.wav".to_string()),
+            ],
+            1.0,
+        );
+
+        let joined = args.join(" ");
+        assert!(joined.contains("amix=inputs=2"));
+        assert!(joined.contains("-map [aout]"));
+    }
+}
+
+fn frame_to_secs(frame: u32, fps: u32) -> f64 {
+    if fps == 0 {
+        0.0
+    } else {
+        frame as f64 / fps as f64
+    }
+}
+
+fn export_duration_secs(config: &ExportConfig, fps: u32) -> f64 {
+    if fps == 0 {
+        0.0
+    } else {
+        selected_frame_count(config) as f64 / fps as f64
+    }
+}
+
+fn selected_audio_inputs(config: &ExportConfig) -> Vec<(String, String)> {
+    let store = COMPLETED_RECORDING.read().unwrap();
+    let Some(rec) = store.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut inputs = Vec::new();
+    if config.include_system_audio.unwrap_or(true) {
+        if let Some(track) = rec.audio_tracks.iter().find(|track| {
+            track.kind == AudioTrackKind::System && track.available && track.path.exists()
+        }) {
+            inputs.push((
+                "system".to_string(),
+                track.path.to_string_lossy().to_string(),
+            ));
+        }
+    }
+
+    if config.include_mic_audio.unwrap_or(true) {
+        if let Some(track) = rec.audio_tracks.iter().find(|track| {
+            track.kind == AudioTrackKind::Mic && track.available && track.path.exists()
+        }) {
+            inputs.push(("mic".to_string(), track.path.to_string_lossy().to_string()));
+        }
+    }
+
+    inputs
+}
+
+fn append_mp4_filters_and_maps(
+    args: &mut Vec<String>,
+    vf_filters: &[String],
+    audio_inputs: &[(String, String)],
+    speed: f64,
+) {
+    let audio_filter = atempo_filter(speed);
+
+    if audio_inputs.is_empty() {
+        if !vf_filters.is_empty() {
+            args.extend(["-vf".to_string(), vf_filters.join(",")]);
+        }
+        args.extend(["-map".to_string(), "0:v".to_string()]);
+        return;
+    }
+
+    if audio_inputs.len() == 1 && audio_filter.is_none() {
+        if !vf_filters.is_empty() {
+            args.extend(["-vf".to_string(), vf_filters.join(",")]);
+        }
+        args.extend(["-map".to_string(), "0:v".to_string()]);
+        args.extend(["-map".to_string(), "1:a".to_string()]);
+        return;
+    }
+
+    let mut filter_complex = String::new();
+    if !vf_filters.is_empty() {
+        filter_complex.push_str(&format!("[0:v]{}[vout];", vf_filters.join(",")));
+    }
+
+    if audio_inputs.len() == 1 {
+        if let Some(filter) = audio_filter.as_ref() {
+            filter_complex.push_str(&format!("[1:a]{}[aout]", filter));
+        }
+    } else {
+        for i in 0..audio_inputs.len() {
+            let input_idx = i + 1;
+            if let Some(filter) = audio_filter.as_ref() {
+                filter_complex.push_str(&format!("[{}:a]{}[a{}];", input_idx, filter, i));
+            }
+        }
+        let labels = (0..audio_inputs.len())
+            .map(|i| {
+                if audio_filter.is_some() {
+                    format!("[a{}]", i)
+                } else {
+                    format!("[{}:a]", i + 1)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        filter_complex.push_str(&format!(
+            "{}amix=inputs={}:duration=longest[aout]",
+            labels,
+            audio_inputs.len()
+        ));
+    }
+
+    args.extend(["-filter_complex".to_string(), filter_complex]);
+    args.extend([
+        "-map".to_string(),
+        if vf_filters.is_empty() {
+            "0:v"
+        } else {
+            "[vout]"
+        }
+        .to_string(),
+    ]);
+    args.extend(["-map".to_string(), "[aout]".to_string()]);
+}
+
+fn atempo_filter(speed: f64) -> Option<String> {
+    if (speed - 1.0).abs() <= 0.01 {
+        return None;
+    }
+
+    let mut remaining = speed;
+    let mut filters = Vec::new();
+    while remaining > 2.0 {
+        filters.push("atempo=2".to_string());
+        remaining /= 2.0;
+    }
+    while remaining < 0.5 {
+        filters.push("atempo=0.5".to_string());
+        remaining /= 0.5;
+    }
+    filters.push(format!("atempo={}", trim_float(remaining)));
+    Some(filters.join(","))
+}
+
+fn trim_float(value: f64) -> String {
+    let text = format!("{:.6}", value);
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn pipe_frames_to_ffmpeg(

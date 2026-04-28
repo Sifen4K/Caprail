@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
@@ -31,6 +31,8 @@ const exportMp4Btn = document.getElementById("export-mp4-btn")!;
 const exportGifBtn = document.getElementById("export-gif-btn")!;
 const exportProgress = document.getElementById("export-progress")!;
 const exportProgressBar = document.getElementById("export-progress-bar")!;
+const systemAudioToggle = document.getElementById("system-audio-toggle") as HTMLInputElement;
+const micAudioToggle = document.getElementById("mic-audio-toggle") as HTMLInputElement;
 
 let totalFrames = 0;
 let fps = 30;
@@ -48,6 +50,12 @@ let lastFrameTime = 0;
 let animFrameId = 0;
 let pendingPlaybackFrame: number | null = null;
 let recordingGeneration = 0;
+let systemAudio: HTMLAudioElement | null = null;
+let micAudio: HTMLAudioElement | null = null;
+let systemAudioAvailable = false;
+let micAudioAvailable = false;
+let systemAudioUserChanged = false;
+let micAudioUserChanged = false;
 
 // ── Unified drag state ────────────────────────────────────────────────
 type DragMode = null | "scrub" | "trim-start" | "trim-end";
@@ -78,6 +86,8 @@ async function loadRecording() {
       trimStartFrame: number;
       trimEndFrame: number;
       terminalFrame: number;
+      systemAudioAvailable: boolean;
+      micAvailable: boolean;
     }>("get_recording_editor_session");
 
     videoWidth = info.width;
@@ -88,7 +98,14 @@ async function loadRecording() {
     trimStartFrame = info.trimStartFrame;
     trimEndFrame = info.trimEndFrame;
     currentFrame = Math.min(currentFrame, info.terminalFrame);
-
+    systemAudioAvailable = info.systemAudioAvailable;
+    micAudioAvailable = info.micAvailable;
+    systemAudioUserChanged = false;
+    micAudioUserChanged = false;
+    systemAudioToggle.checked = systemAudioAvailable;
+    systemAudioToggle.disabled = !systemAudioAvailable;
+    micAudioToggle.checked = micAudioAvailable;
+    micAudioToggle.disabled = !micAudioAvailable;
     if (generation !== recordingGeneration) {
       return;
     }
@@ -100,6 +117,7 @@ async function loadRecording() {
     updateTrimUI();
 
     fetchAndRender(trimStartFrame);
+    void loadAudioPreviews(info.systemAudioAvailable, info.micAvailable, generation);
   } catch (err) {
     console.error("Failed to load recording info:", err);
   }
@@ -231,6 +249,93 @@ async function fetchAndRender(frameIndex: number) {
   await renderFrameAsync(frameIndex);
 }
 
+async function loadAudioPreviews(systemAvailable: boolean, micAvailable: boolean, generation: number) {
+  disposeAudioPreviews();
+
+  if (systemAvailable) {
+    systemAudio = await loadAudioPreview("system", generation);
+    if (systemAudio) {
+      activateAudioPreview(systemAudio, systemAudioToggle, "System audio");
+    }
+  }
+
+  if (micAvailable) {
+    micAudio = await loadAudioPreview("mic", generation);
+    if (micAudio) {
+      activateAudioPreview(micAudio, micAudioToggle, "Mic audio");
+    }
+  }
+}
+
+async function loadAudioPreview(kind: "system" | "mic", generation: number): Promise<HTMLAudioElement | null> {
+  try {
+    const path = await invoke<string>("get_recording_audio_track_path", { kind });
+    if (generation !== recordingGeneration) return null;
+
+    const url = convertFileSrc(path);
+    const audio = new Audio(url);
+    audio.preload = "auto";
+    audio.playbackRate = playbackSpeed;
+
+    return audio;
+  } catch (err) {
+    console.error(`Failed to load ${kind} audio preview:`, err);
+    return null;
+  }
+}
+
+function activateAudioPreview(audio: HTMLAudioElement, toggle: HTMLInputElement, label: string) {
+  audio.muted = !toggle.checked;
+  audio.playbackRate = playbackSpeed;
+  if (isPlaying) {
+    syncAudioElementToFrame(audio, currentFrame);
+    void audio.play().catch((err) => console.error(`${label} preview failed:`, err));
+  }
+}
+
+function disposeAudioPreviews() {
+  pauseAudioPlayback();
+  systemAudio = null;
+  micAudio = null;
+}
+
+function currentFrameTime(frameIndex: number): number {
+  return fps > 0 ? frameIndex / fps : 0;
+}
+
+function syncAudioElementToFrame(audio: HTMLAudioElement, frameIndex: number) {
+  const time = currentFrameTime(frameIndex);
+  if (Number.isFinite(time)) {
+    audio.currentTime = Math.max(0, time);
+  }
+}
+
+function syncAudioToFrame(frameIndex: number) {
+  for (const audio of [systemAudio, micAudio]) {
+    if (!audio) continue;
+    syncAudioElementToFrame(audio, frameIndex);
+  }
+}
+
+function startAudioPlayback(frameIndex: number) {
+  syncAudioToFrame(frameIndex);
+  if (systemAudio) {
+    systemAudio.muted = !systemAudioToggle.checked;
+    systemAudio.playbackRate = playbackSpeed;
+    void systemAudio.play().catch((err) => console.error("System audio preview failed:", err));
+  }
+  if (micAudio) {
+    micAudio.muted = !micAudioToggle.checked;
+    micAudio.playbackRate = playbackSpeed;
+    void micAudio.play().catch((err) => console.error("Mic audio preview failed:", err));
+  }
+}
+
+function pauseAudioPlayback() {
+  systemAudio?.pause();
+  micAudio?.pause();
+}
+
 function prefetchFrames(fromFrame: number) {
   for (let i = 1; i <= CACHE_AHEAD; i++) {
     if (pendingFetches.size >= MAX_INFLIGHT) break;
@@ -260,6 +365,15 @@ function resetRecordingState() {
   trimEndFrame = 0;
   totalFrames = 0;
   duration = 0;
+  systemAudioToggle.checked = false;
+  systemAudioToggle.disabled = true;
+  micAudioToggle.checked = false;
+  micAudioToggle.disabled = true;
+  systemAudioAvailable = false;
+  micAudioAvailable = false;
+  systemAudioUserChanged = false;
+  micAudioUserChanged = false;
+  disposeAudioPreviews();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
@@ -293,6 +407,7 @@ function getFrameFromPointer(clientX: number): number {
 function seekToFrame(frameIndex: number) {
   frameIndex = clamp(frameIndex, 0, totalFrames - 1);
   currentFrame = frameIndex;
+  syncAudioToFrame(frameIndex);
   updatePlayhead();
   updateTimeDisplay();
 
@@ -352,6 +467,7 @@ async function startPlayback() {
   playBtn.textContent = "\u23F8";
 
   prefetchFrames(startFrame);
+  startAudioPlayback(startFrame);
 
   lastFrameTime = performance.now();
   playbackLoop();
@@ -362,6 +478,7 @@ function stopPlayback() {
   isStartingPlayback = false;
   pendingPlaybackFrame = null;
   playBtn.textContent = "\u25B6";
+  pauseAudioPlayback();
   if (animFrameId) {
     cancelAnimationFrame(animFrameId);
     animFrameId = 0;
@@ -432,6 +549,18 @@ playBtn.addEventListener("click", () => {
 
 speedSelect.addEventListener("change", () => {
   playbackSpeed = parseFloat(speedSelect.value);
+  if (systemAudio) systemAudio.playbackRate = playbackSpeed;
+  if (micAudio) micAudio.playbackRate = playbackSpeed;
+});
+
+systemAudioToggle.addEventListener("change", () => {
+  systemAudioUserChanged = true;
+  if (systemAudio) systemAudio.muted = !systemAudioToggle.checked;
+});
+
+micAudioToggle.addEventListener("change", () => {
+  micAudioUserChanged = true;
+  if (micAudio) micAudio.muted = !micAudioToggle.checked;
 });
 
 timeline.addEventListener("mousedown", (e) => {
@@ -616,6 +745,8 @@ async function doExport(format: "mp4" | "gif") {
         format: "mp4" | "gif";
         gifFps: number | null;
         gifMaxWidth: number | null;
+        includeSystemAudio: boolean;
+        includeMicAudio: boolean;
       };
       selectedFrameCount: number;
     }>("prepare_export_video", {
@@ -627,6 +758,8 @@ async function doExport(format: "mp4" | "gif") {
         format,
         gifFps: format === "gif" ? 15 : null,
         gifMaxWidth: format === "gif" ? 640 : null,
+        includeSystemAudio: format === "mp4" ? shouldIncludeSystemAudio() : false,
+        includeMicAudio: format === "mp4" ? shouldIncludeMicAudio() : false,
       },
     });
     await invoke("export_video", {
@@ -641,6 +774,16 @@ async function doExport(format: "mp4" | "gif") {
 
 exportMp4Btn.addEventListener("click", () => doExport("mp4"));
 exportGifBtn.addEventListener("click", () => doExport("gif"));
+
+function shouldIncludeSystemAudio(): boolean {
+  if (!systemAudioAvailable) return false;
+  return systemAudioUserChanged ? systemAudioToggle.checked : true;
+}
+
+function shouldIncludeMicAudio(): boolean {
+  if (!micAudioAvailable) return false;
+  return micAudioUserChanged ? micAudioToggle.checked : true;
+}
 
 const resizeObserver = new ResizeObserver(() => {
   updateTrimUI();

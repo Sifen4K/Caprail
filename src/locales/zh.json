@@ -93,6 +93,8 @@
     "title": "录屏编辑器",
     "play": "播放",
     "speed": "速度：",
+    "systemAudio": "系统音频",
+    "microphone": "麦克风",
     "exportMp4": "导出 MP4",
     "exportGif": "导出 GIF"
   },

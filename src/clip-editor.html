@@ -132,6 +132,20 @@
       padding: 4px 8px;
       border-radius: 4px;
     }
+    .audio-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #ddd;
+      white-space: nowrap;
+    }
+    .audio-toggle input {
+      accent-color: #4CAF50;
+    }
+    .audio-toggle:has(input:disabled) {
+      color: #777;
+    }
     #time-display {
       font-family: monospace;
       font-size: 13px;
@@ -182,6 +196,14 @@
           <option value="2">2x</option>
           <option value="4">4x</option>
         </select>
+      </label>
+      <label class="audio-toggle">
+        <input type="checkbox" id="system-audio-toggle" checked>
+        <span data-i18n="clipEditor.systemAudio">System Audio</span>
+      </label>
+      <label class="audio-toggle">
+        <input type="checkbox" id="mic-audio-toggle" checked>
+        <span data-i18n="clipEditor.microphone">Mic</span>
       </label>
       <div class="spacer"></div>
       <button class="ctrl-btn primary" id="export-mp4-btn" data-i18n="clipEditor.exportMp4">Export MP4</button>

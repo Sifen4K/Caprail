@@ -115,6 +115,14 @@ pub fn cleanup_recording() -> Result<(), String> {
     Ok(())
 }
 
+fn clear_completed_recording(reason: &str) {
+    let mut store = COMPLETED_RECORDING.write().unwrap();
+    if store.is_some() {
+        *store = None;
+        info!("Cleared previous completed recording {}", reason);
+    }
+}
+
 // ── Recording session ────────────────────────────────────────────────
 
 static SESSION: once_cell::sync::Lazy<Mutex<Option<RecordingSession>>> =
@@ -299,6 +307,8 @@ pub async fn start_recording_workflow(
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
+    clear_completed_recording("before opening the recording editor placeholder");
+
     let clip_editor = WebviewWindowBuilder::new(
         &app,
         "clip-editor",
@@ -418,13 +428,7 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
         return Err("Already recording".to_string());
     }
 
-    {
-        let mut completed_store = COMPLETED_RECORDING.write().unwrap();
-        if completed_store.is_some() {
-            *completed_store = None;
-            info!("Cleared previous completed recording before starting a new session");
-        }
-    }
+    clear_completed_recording("before starting a new session");
 
     // Round to even dimensions (required for H.264 export later)
     let width = ((config.width + 1) & !1) as u32;

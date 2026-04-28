@@ -106,12 +106,16 @@ async function loadRecording() {
 }
 
 // Try loading immediately (works if window created after recording stopped).
-// If recording data isn't ready yet (pre-created window), wait for signal.
+// Always listen for the ready signal too: a hidden pre-created editor can start
+// before the old recording store has been cleared, so a later stop must force a
+// fresh load even if the first read succeeded.
+listen("recording-data-ready", () => loadRecording()).catch((err) => {
+  console.error("Failed to listen for recording data readiness:", err);
+});
+
 invoke("get_recording_editor_session")
   .then(() => loadRecording())
-  .catch(() => {
-    listen("recording-data-ready", () => loadRecording());
-  });
+  .catch(() => {});
 
 // Free in-memory frames when editor window closes
 window.addEventListener("beforeunload", () => {

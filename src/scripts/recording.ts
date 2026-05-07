@@ -1,5 +1,6 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { resolution } from "./resolution-context";
 
 let recordWindow: WebviewWindow | null = null;
@@ -45,6 +46,12 @@ export async function createRecordingCaptureWindow() {
     } catch (e) {
       console.error("Failed to set overlay size/position:", e);
     }
+    await invoke("set_window_exclude_from_capture", { label: "record-overlay" }).catch((err) => {
+      console.warn("Failed to exclude record overlay from capture:", err);
+    });
+    await invoke("flush_desktop_composition").catch((err) => {
+      console.warn("Failed to flush desktop composition after excluding record overlay:", err);
+    });
     console.log("Record overlay window created");
   });
 

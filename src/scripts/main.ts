@@ -20,6 +20,22 @@ function updateStatus(msg: string) {
   status.textContent = msg;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function flushDesktopComposition(context: string) {
+  await invoke("flush_desktop_composition").catch((err) => {
+    console.warn(`Failed to flush desktop composition ${context}:`, err);
+  });
+}
+
+async function settleDesktopComposition(context: string) {
+  await flushDesktopComposition(context);
+  await sleep(60);
+  await flushDesktopComposition(`${context} after delay`);
+}
+
 // Convert "Ctrl+Shift+A" to "CommandOrControl+Shift+A" for Tauri
 function toTauriShortcut(shortcut: string): string {
   return shortcut.replace(/Ctrl/gi, "CommandOrControl");
@@ -325,6 +341,11 @@ async function setup() {
       // first recording frames are captured.
       const overlayWindow = await WebviewWindow.getByLabel("record-overlay");
       if (overlayWindow) {
+        await overlayWindow.hide().catch((err) => {
+          console.warn("Failed to hide record overlay before close:", err);
+        });
+        await settleDesktopComposition("after hiding record overlay");
+
         // Set up a promise that resolves when the window is destroyed,
         // with a safety timeout so we never block forever.
         await new Promise<void>((resolve) => {
@@ -345,12 +366,13 @@ async function setup() {
 
           // Initiate the close — the promise above will wait for the
           // actual destruction event.
-          overlayWindow.close();
+          void overlayWindow.close().catch((err) => {
+            console.warn("Failed to close record overlay:", err);
+            done();
+          });
         });
       }
-      await invoke("flush_desktop_composition").catch((err) => {
-        console.warn("Failed to flush desktop composition before recording:", err);
-      });
+      await settleDesktopComposition("before recording");
 
       try {
         await resolution.refresh().catch(() => {});

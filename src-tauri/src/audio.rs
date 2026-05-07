@@ -12,6 +12,8 @@ use windows::Win32::Media::Audio::WAVEFORMATEX;
 #[cfg(windows)]
 use windows::Win32::Media::KernelStreaming::{KSDATAFORMAT_SUBTYPE_PCM, WAVE_FORMAT_EXTENSIBLE};
 #[cfg(windows)]
+const WASAPI_BUFFER_DURATION_100NS: i64 = 1_000_000; // 100 ms
+#[cfg(windows)]
 const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: windows::core::GUID =
     windows::core::GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 
@@ -237,7 +239,7 @@ fn capture_track_windows(
                 .Initialize(
                     AUDCLNT_SHAREMODE_SHARED,
                     stream_flags,
-                    10_000_000,
+                    WASAPI_BUFFER_DURATION_100NS,
                     0,
                     mix_format,
                     None,
@@ -252,8 +254,37 @@ fn capture_track_windows(
             client
                 .Start()
                 .map_err(|e| format!("IAudioClient::Start failed: {}", e))?;
+            let mut stream_started = true;
 
             while !stop_signal.load(Ordering::SeqCst) {
+                if paused.load(Ordering::SeqCst) {
+                    if stream_started {
+                        let _ = client.Stop();
+                        if let Err(err) = client.Reset() {
+                            warn!(
+                                "IAudioClient::Reset on pause failed for {}: {}",
+                                kind.as_str(),
+                                err
+                            );
+                        }
+                        stream_started = false;
+                    }
+
+                    while paused.load(Ordering::SeqCst) && !stop_signal.load(Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+
+                    if stop_signal.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    client
+                        .Start()
+                        .map_err(|e| format!("IAudioClient::Start after pause failed: {}", e))?;
+                    stream_started = true;
+                    continue;
+                }
+
                 let mut packet_frames = capture
                     .GetNextPacketSize()
                     .map_err(|e| format!("GetNextPacketSize failed: {}", e))?;
@@ -264,6 +295,10 @@ fn capture_track_windows(
                 }
 
                 while packet_frames > 0 {
+                    if paused.load(Ordering::SeqCst) {
+                        break;
+                    }
+
                     let mut data = null_mut();
                     let mut frames = 0;
                     let mut flags = Default::default();
@@ -278,7 +313,8 @@ fn capture_track_windows(
                             writer.write_silence_frames(frames)?;
                         } else {
                             let bytes = std::slice::from_raw_parts(data as *const u8, byte_len);
-                            let sample_format = SampleFormat::from_wave_format(mix_format, &format);
+                            let sample_format =
+                                SampleFormat::from_wave_format(mix_format, &format);
                             writer.write_captured_audio(bytes, &format, frames, sample_format)?;
                         }
                     }
@@ -286,13 +322,18 @@ fn capture_track_windows(
                     capture
                         .ReleaseBuffer(frames)
                         .map_err(|e| format!("ReleaseBuffer failed: {}", e))?;
+                    if paused.load(Ordering::SeqCst) {
+                        break;
+                    }
                     packet_frames = capture
                         .GetNextPacketSize()
                         .map_err(|e| format!("GetNextPacketSize failed: {}", e))?;
                 }
             }
 
-            let _ = client.Stop();
+            if stream_started {
+                let _ = client.Stop();
+            }
             writer.finalize()?;
             CoTaskMemFree(Some(mix_format as *const _));
 

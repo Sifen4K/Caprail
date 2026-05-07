@@ -176,6 +176,9 @@ canvas.addEventListener("mouseup", async () => {
       width: Math.round(selection.width),
       height: Math.round(selection.height),
     });
+    await getCurrentWindow().hide().catch((err) => {
+      console.warn("Failed to hide record overlay after selection:", err);
+    });
     // Do not close here — main.ts will close this window and wait for
     // its destruction before starting the recording, avoiding the race
     // condition where the red overlay border appears in captured frames.

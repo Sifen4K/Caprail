@@ -67,11 +67,11 @@ pub fn cleanup_audio_track_files(tracks: &[CompletedAudioTrack]) {
     }
 }
 
-pub fn start_default_audio_capture(paused: Arc<AtomicBool>) -> AudioCaptureSession {
+pub fn start_default_audio_capture(clock: Arc<crate::recording_clock::RecordingClock>) -> AudioCaptureSession {
     let mut tracks = Vec::new();
 
     for kind in [AudioTrackKind::System, AudioTrackKind::Mic] {
-        match start_track(kind, paused.clone()) {
+        match start_track(kind, clock.clone()) {
             Ok(track) => tracks.push(track),
             Err(err) => warn!("Audio capture unavailable for {}: {}", kind.as_str(), err),
         }
@@ -120,7 +120,7 @@ impl AudioCaptureSession {
     }
 }
 
-fn start_track(kind: AudioTrackKind, paused: Arc<AtomicBool>) -> Result<RunningAudioTrack, String> {
+fn start_track(kind: AudioTrackKind, clock: Arc<crate::recording_clock::RecordingClock>) -> Result<RunningAudioTrack, String> {
     let dir = audio_temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("caprail-{}-{}.wav", kind.as_str(), unique_suffix()));
@@ -131,11 +131,10 @@ fn start_track(kind: AudioTrackKind, paused: Arc<AtomicBool>) -> Result<RunningA
     );
     let stop_signal = Arc::new(AtomicBool::new(false));
     let thread_stop = stop_signal.clone();
-    let thread_paused = paused.clone();
+    let thread_clock = clock.clone();
     let thread_path = path.clone();
 
-    let handle =
-        std::thread::spawn(move || capture_track(kind, thread_path, thread_stop, thread_paused));
+    let handle = std::thread::spawn(move || capture_track(kind, thread_path, thread_stop, thread_clock));
 
     Ok(RunningAudioTrack {
         kind,
@@ -150,9 +149,9 @@ fn capture_track(
     kind: AudioTrackKind,
     path: PathBuf,
     stop_signal: Arc<AtomicBool>,
-    paused: Arc<AtomicBool>,
+    clock: Arc<crate::recording_clock::RecordingClock>,
 ) -> CompletedAudioTrack {
-    match capture_track_windows(kind, path.clone(), stop_signal, paused) {
+    match capture_track_windows(kind, path.clone(), stop_signal, clock) {
         Ok(track) => track,
         Err(err) => {
             warn!("WASAPI capture failed for {}: {}", kind.as_str(), err);
@@ -166,7 +165,7 @@ fn capture_track(
     kind: AudioTrackKind,
     path: PathBuf,
     stop_signal: Arc<AtomicBool>,
-    _paused: Arc<AtomicBool>,
+    _clock: Arc<crate::recording_clock::RecordingClock>,
 ) -> CompletedAudioTrack {
     while !stop_signal.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -179,7 +178,7 @@ fn capture_track_windows(
     kind: AudioTrackKind,
     path: PathBuf,
     stop_signal: Arc<AtomicBool>,
-    paused: Arc<AtomicBool>,
+    clock: Arc<crate::recording_clock::RecordingClock>,
 ) -> Result<CompletedAudioTrack, String> {
     use std::ptr::null_mut;
     use windows::Win32::Media::Audio::{
@@ -229,6 +228,20 @@ fn capture_track_windows(
             let mix_format = client
                 .GetMixFormat()
                 .map_err(|e| format!("GetMixFormat failed: {}", e))?;
+
+            // Wrap mix_format in RAII guard to ensure it's freed
+            struct ComMemGuard<T>(*mut T);
+            impl<T> Drop for ComMemGuard<T> {
+                fn drop(&mut self) {
+                    if !self.0.is_null() {
+                        unsafe {
+                            CoTaskMemFree(Some(self.0 as *const _ as *mut _));
+                        }
+                    }
+                }
+            }
+            let _mix_format_guard = ComMemGuard(mix_format);
+
             let format = *mix_format;
             let stream_flags = if kind == AudioTrackKind::System {
                 AUDCLNT_STREAMFLAGS_LOOPBACK
@@ -254,51 +267,29 @@ fn capture_track_windows(
             client
                 .Start()
                 .map_err(|e| format!("IAudioClient::Start failed: {}", e))?;
-            let mut stream_started = true;
+
+            let sample_rate = format.nSamplesPerSec;
+            // Total frames written to WAV file
+            let mut total_written_frames: u64 = 0;
+
+            // Check for 4GB WAV size limit
+            const WAV_SIZE_LIMIT: u32 = 4_294_967_295 - 1024;
 
             while !stop_signal.load(Ordering::SeqCst) {
-                if paused.load(Ordering::SeqCst) {
-                    if stream_started {
-                        let _ = client.Stop();
-                        if let Err(err) = client.Reset() {
-                            warn!(
-                                "IAudioClient::Reset on pause failed for {}: {}",
-                                kind.as_str(),
-                                err
-                            );
-                        }
-                        stream_started = false;
-                    }
-
-                    while paused.load(Ordering::SeqCst) && !stop_signal.load(Ordering::SeqCst) {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-
-                    if stop_signal.load(Ordering::SeqCst) {
-                        break;
-                    }
-
-                    client
-                        .Start()
-                        .map_err(|e| format!("IAudioClient::Start after pause failed: {}", e))?;
-                    stream_started = true;
-                    continue;
-                }
+                let is_paused = clock.is_paused();
 
                 let mut packet_frames = capture
                     .GetNextPacketSize()
                     .map_err(|e| format!("GetNextPacketSize failed: {}", e))?;
 
                 if packet_frames == 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    // No WASAPI packets available; sleep briefly before retrying.
+                    // On loopback, this happens when the system is not producing audio.
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                     continue;
                 }
 
                 while packet_frames > 0 {
-                    if paused.load(Ordering::SeqCst) {
-                        break;
-                    }
-
                     let mut data = null_mut();
                     let mut frames = 0;
                     let mut flags = Default::default();
@@ -306,36 +297,71 @@ fn capture_track_windows(
                         .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
                         .map_err(|e| format!("GetBuffer failed: {}", e))?;
 
-                    let byte_len = frames as usize * block_align;
-                    if !paused.load(Ordering::SeqCst) {
+                    if !is_paused {
+                        // Fill any gap since the last write to keep WAV timeline in sync with video.
+                        // This is especially important for loopback when the system is silent.
+                        let expected_total_frames = clock.sample_count_at(sample_rate);
+                        if expected_total_frames > total_written_frames {
+                            let gap = expected_total_frames - total_written_frames;
+                            // For mic: gap should be minimal (WASAPI eCapture is continuous)
+                            // For loopback: gap fills silent periods
+                            if kind == AudioTrackKind::System || gap < 1000 {
+                                // Loopback gap-fill or small mic gap
+                                writer.write_silence_frames(gap as u32)?;
+                                total_written_frames += gap;
+                            }
+                        }
+
+                        let byte_len = frames as usize * block_align;
                         let silent_flag = AUDCLNT_BUFFERFLAGS_SILENT.0 as u32;
-                        if flags & silent_flag == silent_flag {
+                        if flags & silent_flag != 0 {
                             writer.write_silence_frames(frames)?;
                         } else {
                             let bytes = std::slice::from_raw_parts(data as *const u8, byte_len);
-                            let sample_format =
-                                SampleFormat::from_wave_format(mix_format, &format);
+                            let sample_format = SampleFormat::from_wave_format(mix_format, &format);
                             writer.write_captured_audio(bytes, &format, frames, sample_format)?;
+                        }
+                        total_written_frames += frames as u64;
+
+                        // Check for WAV size limit
+                        if writer.data_len >= WAV_SIZE_LIMIT {
+                            return Err("WAV file approaching 4GB limit, stopping recording".to_string());
                         }
                     }
 
                     capture
                         .ReleaseBuffer(frames)
                         .map_err(|e| format!("ReleaseBuffer failed: {}", e))?;
-                    if paused.load(Ordering::SeqCst) {
-                        break;
-                    }
+
                     packet_frames = capture
                         .GetNextPacketSize()
                         .map_err(|e| format!("GetNextPacketSize failed: {}", e))?;
                 }
             }
 
-            if stream_started {
-                let _ = client.Stop();
+            // ── Trailing silence pad ─────────────────────────────────────────
+            // When the stop signal fires the capture loop exits immediately.
+            // Fill any gap between the last written frame and the end of the
+            // expected active timeline so the WAV duration always matches
+            // the video duration. This works for both mic and loopback.
+            // If the recording ended while paused, is_paused is still true and
+            // clock has not advanced during the pause, so no pad is written.
+            if !clock.is_paused() {
+                let expected_total_frames = clock.sample_count_at(sample_rate);
+                if expected_total_frames > total_written_frames {
+                    let trailing_gap = expected_total_frames - total_written_frames;
+                    let _ = writer.write_silence_frames(trailing_gap as u32);
+                    tracing::debug!(
+                        "Wrote {:.2}ms trailing silence for {} (total {} frames)",
+                        (trailing_gap as f64 / sample_rate as f64) * 1000.0,
+                        kind.as_str(),
+                        expected_total_frames
+                    );
+                }
             }
+
+            let _ = client.Stop();
             writer.finalize()?;
-            CoTaskMemFree(Some(mix_format as *const _));
 
             let available = writer.data_len > 0;
             Ok(CompletedAudioTrack {

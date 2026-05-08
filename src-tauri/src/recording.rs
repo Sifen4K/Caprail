@@ -197,9 +197,7 @@ struct RecordingSession {
     width: u32,
     height: u32,
     fps: u32,
-    start_time: Instant,
-    pause_duration: f64,
-    last_pause_time: Option<Instant>,
+    clock: Arc<crate::recording_clock::RecordingClock>,
     frame_count: Arc<AtomicU64>,
     #[allow(dead_code)]
     config: RecordingConfig,
@@ -410,6 +408,14 @@ pub async fn start_recording_workflow(
             .map_err(|e| e.to_string())?;
         info!("Set record-indicator to ignore cursor events");
 
+        // Flush DWM after excluding the indicator window from capture so the
+        // compositor updates the screen bitmap before the first GDI BitBlt.
+        // Without this the indicator window can appear as a black block in the
+        // first few captured frames.
+        crate::capture::flush_desktop_composition().ok();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        crate::capture::flush_desktop_composition().ok();
+
         start_recording(workflow.recording.clone())?;
         recording_started = true;
         info!("Recording session started");
@@ -487,6 +493,7 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
     let paused = Arc::new(AtomicBool::new(false));
     let frame_count = Arc::new(AtomicU64::new(0));
     let frames: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
+    let clock = Arc::new(crate::recording_clock::RecordingClock::new());
 
     let mut capture_config = config.clone();
     capture_config.width = width as i32;
@@ -505,15 +512,13 @@ pub fn start_recording(config: RecordingConfig) -> Result<(), String> {
             thread_frames,
         );
     });
-    let audio_session = Some(crate::audio::start_default_audio_capture(paused.clone()));
+    let audio_session = Some(crate::audio::start_default_audio_capture(clock.clone()));
 
     let session = RecordingSession {
         width,
         height,
         fps,
-        start_time: Instant::now(),
-        pause_duration: 0.0,
-        last_pause_time: None,
+        clock,
         frame_count,
         config,
         capture_thread: Some(handle),
@@ -669,7 +674,7 @@ pub fn pause_recording() -> Result<(), String> {
     }
 
     session.paused.store(true, Ordering::SeqCst);
-    session.last_pause_time = Some(Instant::now());
+    session.clock.set_paused(true);
 
     tracing::info!("Recording paused");
     Ok(())
@@ -685,9 +690,7 @@ pub fn resume_recording() -> Result<(), String> {
     }
 
     session.paused.store(false, Ordering::SeqCst);
-    if let Some(pause_start) = session.last_pause_time.take() {
-        session.pause_duration += pause_start.elapsed().as_secs_f64();
-    }
+    session.clock.set_paused(false);
 
     tracing::info!("Recording resumed");
     Ok(())
@@ -707,20 +710,11 @@ pub fn get_recording_status() -> RecordingStatus {
         },
         Some(session) => {
             let is_paused = session.paused.load(Ordering::SeqCst);
-            let elapsed = session.start_time.elapsed().as_secs_f64() - session.pause_duration;
-            let duration = if is_paused {
-                if let Some(pause_start) = session.last_pause_time {
-                    elapsed - pause_start.elapsed().as_secs_f64()
-                } else {
-                    elapsed
-                }
-            } else {
-                elapsed
-            };
-
+            let elapsed_us = session.clock.elapsed_active_us();
+            let duration_secs = elapsed_us as f64 / 1_000_000.0;
             let frame_count = session.frame_count.load(Ordering::SeqCst);
-            let fps = if duration > 0.0 {
-                frame_count as f64 / duration
+            let fps = if duration_secs > 0.0 {
+                frame_count as f64 / duration_secs
             } else {
                 0.0
             };
@@ -728,7 +722,7 @@ pub fn get_recording_status() -> RecordingStatus {
             RecordingStatus {
                 is_recording: true,
                 is_paused,
-                duration_secs: duration,
+                duration_secs,
                 frame_count,
                 fps,
             }

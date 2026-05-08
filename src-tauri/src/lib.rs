@@ -9,6 +9,7 @@ mod config;
 mod export;
 mod ocr;
 mod recording;
+mod recording_clock;
 
 pub use capture::*;
 pub use config::*;
